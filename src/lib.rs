@@ -1,20 +1,76 @@
-use std::{path::Path, io::Read};
+use derive_builder::Builder;
+use derive_more::From;
 
+pub mod builder;
 pub mod unixfs;
 
-pub struct FilesystemWriter {
-    root : unixfs::Data;
+#[derive(Clone, Copy)]
+pub enum WellKnownChunkSize {
+	F32B = 32,
+	F512B = 512,
+	F1KiB = 1024,
+	F16KiB = 16384,
+	F256KiB = 262144,
 }
 
-impl FilesystemWriter {
-	pub fn push_file<P: AsRef<Path>>(&mut self, 
-		reader: impl Read,
-		path: P,
-	) -> Result<(), u8> {
-		unimplemented!()
+#[derive(Clone, Copy, From)]
+pub enum ChunkPolicy {
+	FixedSize(WellKnownChunkSize),
+	// Rabin
+}
+
+impl From<ChunkPolicy> for usize {
+	fn from(policy: ChunkPolicy) -> usize {
+		match policy {
+			ChunkPolicy::FixedSize(size) => size as usize,
+			// ChunkPolicy::Rabin => 262144,
+		}
 	}
-
 }
 
-pub struct FilesystemReader {
+#[derive(Clone, Copy)]
+pub enum LeafPolicy {
+	Raw,
+	// UnixFs,
+}
+
+#[derive(Clone, Copy)]
+pub enum DAGLayout {
+	// Balanced(MaxChildren),
+	// Trickle(MaxChildren, LayerRepeats),
+	Flat,
+}
+
+#[derive(Clone, Copy)]
+pub enum MaxChildren {
+	C11 = 11,
+	C44 = 44,
+	C174 = 174,
+}
+
+#[derive(Clone, Copy)]
+pub enum LayerRepeats {
+	LR1 = 1,
+	LR4 = 4,
+	LR16 = 16,
+}
+
+#[derive(Builder, Clone, Copy)]
+pub struct Config {
+	#[builder(default = "ChunkPolicy::FixedSize(WellKnownChunkSize::F256KiB)")]
+	pub chunk_policy: ChunkPolicy,
+	#[builder(default = "LeafPolicy::Raw")]
+	pub leaf_policy: LeafPolicy,
+	#[builder(default = "DAGLayout::Flat")]
+	pub layout: DAGLayout,
+}
+
+impl Default for Config {
+	fn default() -> Self {
+		Config {
+			chunk_policy: ChunkPolicy::FixedSize(WellKnownChunkSize::F256KiB),
+			leaf_policy: LeafPolicy::Raw,
+			layout: DAGLayout::Flat,
+		}
+	}
 }
