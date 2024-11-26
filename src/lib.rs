@@ -8,8 +8,6 @@ mod flat_iterator;
 pub use flat_iterator::{FlatIterErr, FlatIterator};
 mod with_cid;
 pub use with_cid::WithCid;
-mod builder;
-pub use builder::UnixFsBuilder;
 
 #[derive(Clone, Copy)]
 #[repr(u64)]

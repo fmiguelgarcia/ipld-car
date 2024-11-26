@@ -32,6 +32,12 @@ pub struct WithCid<I> {
 	inner: I,
 }
 
+impl<I> WithCid<I> {
+	pub fn into_inner(self) -> I {
+		self.inner
+	}
+}
+
 /// Build the CID from `buf`.
 ///
 /// # Performance

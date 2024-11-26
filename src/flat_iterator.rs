@@ -17,6 +17,10 @@ pub struct FlatIterator<R: Read> {
 }
 
 impl<R: Read> FlatIterator<R> {
+	pub fn into_inner(self) -> R {
+		self.reader
+	}
+
 	fn next(&mut self) -> Result<Bytes, FlatIterErr> {
 		let mut chunk = BytesMut::zeroed(self.chunk_size.get());
 		let read_bytes = self.reader.read(chunk.as_mut())?;
