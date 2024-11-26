@@ -71,3 +71,18 @@ pub struct UnixTime {
 	#[prost(fixed32, optional, tag = "2")]
 	pub fractional_nanoseconds: ::core::option::Option<u32>,
 }
+
+impl Data {
+	pub fn file(filesize: u64, blocksizes: Vec<u64>) -> Self {
+		Self {
+			r#type: data::DataType::File as i32,
+			filesize: Some(filesize),
+			blocksizes,
+			data: None,
+			hash_type: None,
+			fanout: None,
+			mode: None,
+			mtime: None,
+		}
+	}
+}

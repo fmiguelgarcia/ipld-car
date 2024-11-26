@@ -1,8 +1,22 @@
 use derive_builder::Builder;
 use derive_more::From;
+use std::num::NonZeroUsize;
 
-pub mod builder;
 pub mod unixfs;
+
+mod flat_iterator;
+pub use flat_iterator::{FlatIterErr, FlatIterator};
+mod with_cid;
+pub use with_cid::WithCid;
+mod builder;
+pub use builder::UnixFsBuilder;
+
+#[derive(Clone, Copy)]
+#[repr(u64)]
+pub enum CidCodec {
+	DagPb = 0x70,
+	Raw = 0x55,
+}
 
 #[derive(Clone, Copy)]
 pub enum WellKnownChunkSize {
@@ -19,16 +33,16 @@ pub enum ChunkPolicy {
 	// Rabin
 }
 
-impl From<ChunkPolicy> for usize {
-	fn from(policy: ChunkPolicy) -> usize {
+impl From<ChunkPolicy> for NonZeroUsize {
+	fn from(policy: ChunkPolicy) -> NonZeroUsize {
 		match policy {
-			ChunkPolicy::FixedSize(size) => size as usize,
+			ChunkPolicy::FixedSize(size) => unsafe { NonZeroUsize::new_unchecked(size as usize) },
 			// ChunkPolicy::Rabin => 262144,
 		}
 	}
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LeafPolicy {
 	Raw,
 	// UnixFs,

@@ -6,9 +6,10 @@ edition = "2021"
 [dependencies]
 bytes = "1.8.0"
 derive_builder = "0.20.2"
-derive_more = { version = "1.0.0", features = ["from"] }
+derive_more = { version = "1.0.0", features = ["from", "constructor"] }
 libipld = "0.16.0"
 prost = "0.13.3"
+thiserror-no-std = "2.0.2"
 tracing = "0.1.40"
 
 [build-dependencies]
