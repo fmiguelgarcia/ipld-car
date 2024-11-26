@@ -9,6 +9,7 @@ derive_builder = "0.20.2"
 derive_more = { version = "1.0.0", features = ["from", "constructor"] }
 libipld = "0.16.0"
 prost = "0.13.3"
+quick-protobuf = "0.8.1"
 thiserror-no-std = "2.0.2"
 tracing = "0.1.40"
 

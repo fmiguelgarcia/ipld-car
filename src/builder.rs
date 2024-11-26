@@ -11,10 +11,11 @@ use libipld::{
 	Cid,
 };
 use prost::Message;
+use quick_protobuf::{message::MessageWrite, Writer};
 use std::{
-	collections::HashSet as Set,
+	collections::HashMap as Map,
 	fs::File,
-	io::BufReader,
+	io::{BufReader, Read},
 	path::{Path, PathBuf},
 };
 use thiserror_no_std::Error;
@@ -29,7 +30,7 @@ pub enum UnixFsBuilderErr {
 #[derive(Default)]
 pub struct UnixFsBuilder {
 	config: Config,
-	paths: Set<PathBuf>,
+	paths: Map<PathBuf, Box<dyn Read>>,
 }
 
 impl UnixFsBuilder {
@@ -38,22 +39,35 @@ impl UnixFsBuilder {
 		self
 	}
 
-	pub fn add_file<P: AsRef<Path>>(mut self, path: P) -> Self {
-		self.paths.insert(path.as_ref().to_path_buf());
+	pub fn add_file<F, T>(mut self, from: F, to: T) -> Result<Self, std::io::Error>
+	where
+		F: AsRef<Path>,
+		T: AsRef<Path>,
+	{
+		let file = BufReader::new(File::open(from.as_ref())?);
+		self.paths.insert(to.as_ref().to_path_buf(), Box::new(file));
+		Ok(self)
+	}
+
+	pub fn add_data<D, T>(mut self, data: D, to: T) -> Self
+	where
+		T: AsRef<Path>,
+		D: Read + 'static,
+	{
+		self.paths.insert(to.as_ref().to_path_buf(), Box::new(data));
 		self
 	}
 
-	pub fn build_root_cid(self) -> Result<Cid, UnixFsBuilderErr> {
+	pub fn build(self) -> Result<(Cid, Option<PbNode>), UnixFsBuilderErr> {
 		debug_assert!(self.paths.len() < 2, "No more than one file allowed");
 		assert!(self.config.leaf_policy == LeafPolicy::Raw, "Only Raw leaf policy supported");
 
 		let chunk_size = self.config.chunk_policy.into();
 		let chunker_with_cids = self
 			.paths
-			.into_iter()
-			.map(|path| {
-				let file = File::open(&path)?;
-				let chunker_with_cid = WithCid::new(FlatIterator::new(BufReader::new(file), chunk_size));
+			.into_values()
+			.map(|reader| {
+				let chunker_with_cid = WithCid::new(FlatIterator::new(reader, chunk_size));
 				Ok::<_, FlatIterErr>(chunker_with_cid)
 			})
 			.collect::<Result<Vec<_>, _>>()?;
@@ -72,34 +86,72 @@ impl UnixFsBuilder {
 					})
 					.collect::<Result<Vec<_>, _>>()?;
 
-				let cid = match links.len() {
-					0 => Cid::new_v1(Raw as u64, Code::Sha2_256.digest(&[])),
-					1 => links.pop().expect("At least one link .qed").cid,
+				let (cid, pb_node) = match links.len() {
+					0 => (Cid::new_v1(Raw as u64, Code::Sha2_256.digest(&[])), None),
+					1 => (links.pop().expect("At least one link .qed").cid, None),
 					_ => {
 						let blocksizes = links.iter().filter_map(|link| link.size).collect::<Vec<_>>();
 						let filesize = blocksizes.iter().sum::<u64>();
 						let data: Bytes = unixfs::Data::file(filesize, blocksizes).encode_to_vec().into();
-						let root = PbNode { data: Some(data), links }.into_bytes();
-						Cid::new_v1(DagPb as u64, Code::Sha2_256.digest(&root))
+
+						let pb_node = build_pb_node(links, Some(data));
+						let pb_node_data = encode_pb_node(&pb_node);
+						let cid = Cid::new_v1(DagPb as u64, Code::Sha2_256.digest(&pb_node_data));
+						(cid, Some(pb_node))
 					},
 				};
-				Ok::<_, UnixFsBuilderErr>(cid)
+
+				Ok::<_, UnixFsBuilderErr>((cid, pb_node))
 			})
 			.collect::<Result<Vec<_>, _>>()?;
 		debug_assert!(file_cids.len() == 1, "Only one file allowed");
 		file_cids.pop().ok_or(UnixFsBuilderErr::NoChunks)
 	}
-}
 
-impl<P> FromIterator<P> for UnixFsBuilder
-where
-	P: AsRef<Path>,
-{
-	fn from_iter<T: IntoIterator<Item = P>>(iter: T) -> Self {
-		let paths = iter.into_iter().map(|p| p.as_ref().to_path_buf()).collect();
-		Self { paths, ..Default::default() }
+	pub fn only_root_cid(self) -> Result<Cid, UnixFsBuilderErr> {
+		self.build().map(|(cid, _)| cid)
 	}
 }
+
+/// Build a PBNode from the links and data.
+fn build_pb_node(mut links: Vec<PbLink>, data: Option<Bytes>) -> PbNode {
+	// Links must be strictly sorted by name before encoding, leaving stable
+	// ordering where the names are the same (or absent).
+	links.sort_by(|a, b| {
+		let a = a.name.as_ref().map(|s| s.as_bytes()).unwrap_or(&[][..]);
+		let b = b.name.as_ref().map(|s| s.as_bytes()).unwrap_or(&[][..]);
+		a.cmp(b)
+	});
+
+	PbNode { data, links }
+}
+
+fn encode_pb_node(pb_node: &PbNode) -> Bytes {
+	let mut buf = Vec::with_capacity(pb_node.get_size());
+	let mut writer = Writer::new(&mut buf);
+
+	pb_node.write_message(&mut writer).expect("Protobuf is valid .qed");
+	buf.into()
+}
+
+/*
+impl<I, P> TryFrom<I> for UnixFsBuilder
+where
+	I: Iterator<Item = P>,
+	P: AsRef<Path>,
+{
+	type Error = std::io::Error;
+
+	fn try_from(paths: I) -> Result<Self, Self::Error> {
+		let mut builder = Self::default();
+		for path in paths.map(|path| path.as_ref()) {
+			// .filter(Path::is_file) {
+			let file_name = path.file_name().expect("File name is not empty .qed");
+			builder = builder.add_file(path, file_name)?;
+		}
+		Ok(builder)
+	}
+}*/
 
 #[cfg(test)]
 mod tests {
@@ -136,10 +188,14 @@ mod tests {
 	#[test_case(raw_conf(F512B), &["bitcoin.pdf"] => "bafybeihbxyhevuhjvb4ctfqiglu7im7fqf7ghbfmheysp63npyuiggzfiu"; "BTC whitepaper 512KiB Raw Flat DAG")]
 	#[test_log::test]
 	fn test_add_files<P: AsRef<Path>>(conf: Config, files: &[P]) -> String {
-		let builder = UnixFsBuilder::from_iter(files.iter().map(test_file)).config(conf);
+		let mut builder = UnixFsBuilder::default().config(conf);
+		for file in files.iter().map(test_file).filter(|file| file.is_file()) {
+			let name = PathBuf::from(file.file_name().expect("File name is not empty .qed"));
+			builder = builder.add_file(file, name).expect("Valid file .qed");
+		}
 
 		builder
-			.build_root_cid()
+			.only_root_cid()
 			.expect("Failed to build root CID")
 			.to_string_of_base(Base::Base32Lower)
 			.unwrap()
