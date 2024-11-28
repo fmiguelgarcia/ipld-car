@@ -73,7 +73,22 @@ pub struct UnixTime {
 }
 
 impl Data {
-	pub fn file(filesize: u64, blocksizes: Vec<u64>) -> Self {
+	pub fn file_in_blocks(blocksizes: Vec<u64>) -> Self {
+		let filesize = blocksizes.iter().sum::<u64>();
+		Self {
+			r#type: data::DataType::File as i32,
+			filesize: Some(filesize),
+			blocksizes,
+			data: None,
+			hash_type: None,
+			fanout: None,
+			mode: None,
+			mtime: None,
+		}
+	}
+
+	pub fn file(filesize: u64) -> Self {
+		let blocksizes = vec![filesize];
 		Self {
 			r#type: data::DataType::File as i32,
 			filesize: Some(filesize),
@@ -86,3 +101,123 @@ impl Data {
 		}
 	}
 }
+
+/*
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct PbLink {
+	#[prost(bytes = "vec", required, tag = "1")]
+	cid: ::prost::alloc::vec::Vec<u8>,
+	#[prost(string, optional, tag = "2")]
+	pub name: ::core::option::Option<::prost::alloc::string::String>,
+	#[prost(uint64, optional, tag = "3")]
+	pub size: ::core::option::Option<u64>,
+}
+
+impl PbLink {
+	pub fn new(cid: Cid, size: u64) -> Self {
+		Self { cid: cid.to_bytes(), name: Some(String::new()), size: Some(size) }
+	}
+
+	pub fn cid(&self) -> Option<Cid> {
+		Cid::read_bytes(self.cid.as_slice()).ok()
+	}
+}
+
+impl PartialEq<libipld::pb::PbLink> for PbLink {
+	fn eq(&self, other: &libipld::pb::PbLink) -> bool {
+		self.cid == other.cid.to_bytes() && self.name == other.name && self.size == other.size
+	}
+}
+
+#[derive(Clone, PartialEq, ::prost::Message)]
+struct PbNode {
+	#[prost(message, repeated, tag = "2")]
+	links: ::prost::alloc::vec::Vec<PbLink>,
+	#[prost(message, optional, tag = "1")]
+	pub data: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+
+impl PbNode {
+	pub fn new(mut links: Vec<PbLink>, data: Option<Vec<u8>>) -> Self {
+		// Links must be strictly sorted by name before encoding, leaving stable
+		// ordering where the names are the same (or absent).
+		links.sort_by(|a, b| {
+			let a = a.name.as_ref().map(|s| s.as_bytes()).unwrap_or(&[][..]);
+			let b = b.name.as_ref().map(|s| s.as_bytes()).unwrap_or(&[][..]);
+			a.cmp(b)
+		});
+
+		Self { links, data }
+	}
+
+	pub fn links(&self) -> &[PbLink] {
+		&self.links
+	}
+}
+
+impl PartialEq<libipld::pb::PbNode> for PbNode {
+	fn eq(&self, other: &libipld::pb::PbNode) -> bool {
+		self.links == other.links && self.data.as_ref().map(|d| d.as_ref()) == other.data.as_ref().map(|d| d.as_ref())
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::CidCodec;
+
+	use bytes::Bytes;
+	use libipld::{
+		multihash::{Code, MultihashDigest as _},
+		pb::{PbLink as IpldLink, PbNode as IpldNode},
+		Cid,
+	};
+	use prost::Message as _;
+	use quick_protobuf::{message::MessageWrite, Writer};
+	use test_case::test_matrix;
+
+	fn raw_cid(data: &[u8]) -> Cid {
+		Cid::new_v1(CidCodec::Raw.into() , Code::Sha2_256.digest(data))
+	}
+
+	fn pb_cid(data: &[u8]) -> Cid {
+		Cid::new_v1(CidCodec::DagPb.into(), Code::Sha2_256.digest(data))
+	}
+
+	#[test_matrix(
+		[raw_cid(&[]), pb_cid(&[])],
+		[None, Some("name".into())],
+		[None, Some(1_024u64)]
+	)]
+	fn link_compatibility(cid: Cid, name: Option<String>, size: Option<u64>) {
+		let link = IpldLink { cid, name, size };
+		let mut buf = Vec::with_capacity(link.get_size());
+		let mut writer = Writer::new(&mut buf);
+		link.write_message(&mut writer).expect("protobuf to be valid");
+
+		let new_link = PbLink::decode(&*buf).expect("prost to be valid");
+		assert_eq!(new_link, link);
+	}
+
+	fn build_links(count: usize) -> Vec<IpldLink> {
+		(0..count)
+			.map(|i| IpldLink { cid: raw_cid(&[i as u8]), name: Some(i.to_string()), size: Some(i as u64) })
+			.collect()
+	}
+
+	#[test_matrix(
+		[vec![], build_links(1), build_links(42)],
+		[None, Some(Bytes::from_static(&[])), /*Some(Bytes::from_static(b"Hello prost"))*/]
+	)]
+	#[ignore = "If data is some bytes, the test panics"]
+	fn node_compatibility(links: Vec<IpldLink>, data: Option<Bytes>) {
+		let pb_node = IpldNode { links, data };
+		let mut buf = Vec::with_capacity(pb_node.get_size());
+		let mut writer = Writer::new(&mut buf);
+		pb_node.write_message(&mut writer).expect("protobuf to be valid");
+
+		let new_node = PbNode::decode(&*buf).expect("prost to be valid");
+		assert_eq!(new_node, pb_node);
+	}
+}
+*/

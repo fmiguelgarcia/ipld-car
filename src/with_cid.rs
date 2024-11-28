@@ -23,7 +23,7 @@ use tracing::trace;
 ///  let chunk_size = NonZeroUsize::new(2).unwrap();
 ///  let (cid, chunk) = WithCid::new(FlatIterator::new(&b"hello"[..], chunk_size)).next().unwrap().unwrap();
 ///
-///  let expected_cid = Cid::new_v1(Raw as u64, Code::Sha2_256.digest(b"he"));
+///  let expected_cid = Cid::new_v1(Raw.into(), Code::Sha2_256.digest(b"he"));
 ///  assert_eq!(cid, expected_cid);
 ///  assert_eq!(chunk, Bytes::from_static(b"he"));
 ///  ```
@@ -53,7 +53,7 @@ where
 	let read_bytes = io::copy(&mut reader, &mut hasher)?;
 	trace!(read_bytes);
 	let digest = Code::Sha2_256.wrap(hasher.finalize())?;
-	let cid = Cid::new_v1(Raw as u64, digest);
+	let cid = Cid::new_v1(Raw.into(), digest);
 	Ok((cid, buf))
 }
 
@@ -81,8 +81,8 @@ mod tests {
 	use std::{cmp::min, num::NonZeroUsize};
 	use test_case::test_case;
 
-	#[test_case(b"hello", 10 => Cid::new_v1(Raw as u64, Code::Sha2_256.digest(b"hello")))]
-	#[test_case(b"hello", 2 => Cid::new_v1(Raw as u64, Code::Sha2_256.digest(b"he")))]
+	#[test_case(b"hello", 10 => Cid::new_v1(Raw.into(), Code::Sha2_256.digest(b"hello")))]
+	#[test_case(b"hello", 2 => Cid::new_v1(Raw.into() , Code::Sha2_256.digest(b"he")))]
 	fn check_first_cid(data: &[u8], chunk_size: usize) -> Cid {
 		let max_first_chunk_len = min(data.len(), chunk_size);
 		let chunk_size = NonZeroUsize::new(chunk_size).unwrap();

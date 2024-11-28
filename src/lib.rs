@@ -3,17 +3,41 @@ use derive_more::From;
 use std::num::NonZeroUsize;
 
 pub mod unixfs;
+pub use unixfs::{FileSystemWriter, PbLink, PbNode, UnixFs};
 
 mod flat_iterator;
 pub use flat_iterator::{FlatIterErr, FlatIterator};
 mod with_cid;
 pub use with_cid::WithCid;
 
+#[cfg(test)]
+mod test_helpers;
+
 #[derive(Clone, Copy)]
-#[repr(u64)]
 pub enum CidCodec {
 	DagPb = 0x70,
 	Raw = 0x55,
+}
+
+impl TryFrom<u64> for CidCodec {
+	type Error = ();
+
+	fn try_from(codec: u64) -> Result<Self, Self::Error> {
+		match codec {
+			0x70 => Ok(CidCodec::DagPb),
+			0x55 => Ok(CidCodec::Raw),
+			_ => Err(()),
+		}
+	}
+}
+
+impl From<CidCodec> for u64 {
+	fn from(codec: CidCodec) -> u64 {
+		match codec {
+			CidCodec::DagPb => 0x70,
+			CidCodec::Raw => 0x55,
+		}
+	}
 }
 
 #[derive(Clone, Copy)]
