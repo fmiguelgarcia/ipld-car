@@ -18,7 +18,7 @@ pub(crate) fn raw_conf(chunk_size: WellKnownChunkSize) -> Config {
 }
 
 pub(crate) fn test_file<P: AsRef<Path>>(relative_path: P) -> BufReader<File> {
-	let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+	let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("Env variable CARGO_MANIFEST_DIR is missing");
 	let path = Path::new(&manifest_dir).join("resources").join("tests").join(relative_path);
 	BufReader::new(File::open(path).expect("Test file exists .qed"))
 }

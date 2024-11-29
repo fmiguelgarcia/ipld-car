@@ -17,5 +17,16 @@ tracing = "0.1.40"
 prost-build = "0.13.3"
 
 [dev-dependencies]
+criterion = "0.5.1"
+rand = "0.8.4"
+tempfile = "3.2.0"
 test-case = "3.3.1"
 test-log = { version = "0.2.16", features = ["trace"] }
+
+[[bench]]
+name = "fs_reader"
+harness = false
+
+[features]
+default = ["jumbo-chunks"]
+jumbo-chunks = []

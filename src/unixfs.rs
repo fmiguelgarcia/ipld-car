@@ -70,8 +70,8 @@ pub(crate) mod pb {
 		use super::*;
 		use bytes::Bytes;
 		use libipld::pb::{PbLink, PbNode};
-		use quick_protobuf::{reader::BytesReader as ProtoBytesReader, MessageWrite as _, Writer};
-		use std::io::Read;
+		use quick_protobuf::{reader::BytesReader as ProtoBytesReader, MessageRead, MessageWrite as _, Writer};
+		use std::io::{ErrorKind, Read};
 
 		pub(crate) fn new<D>(mut links: Vec<PbLink>, data: D) -> PbNode
 		where
@@ -90,32 +90,28 @@ pub(crate) mod pb {
 
 		pub(crate) fn decode<R: Read>(reader: &mut R) -> Result<PbNode, DecodeError> {
 			let mut var_reader = VarintRead::new(reader);
-			let encoded = var_reader.read_message()?;
-			let bytes = encoded.as_slice();
-			let mut r = ProtoBytesReader::from_bytes(bytes);
-
 			let mut node = PbNode::default();
-			let mut links_before_data = false;
-			while !r.is_eof() {
-				match r.next_tag(bytes)? {
-					18 => {
-						// Links and data might be in any order, but they may not be interleaved.
-						if links_before_data {
-							return Err(DecodeError::DuplicateLinks);
-						}
-						node.links.push(r.read_message::<PbLink>(bytes)?)
+
+			loop {
+				match var_reader.next_tag() {
+					Ok(10) => {
+						let data: Bytes = var_reader.read_bytes()?.into();
+						node.data = Some(data);
 					},
-					10 => {
-						node.data = Some(Bytes::copy_from_slice(r.read_bytes(bytes)?));
-						if !node.links.is_empty() {
-							links_before_data = true
-						}
+					Ok(18) => {
+						let link_msg: Bytes = var_reader.read_message()?.into();
+						let mut r = ProtoBytesReader::from_bytes(&link_msg);
+						let link = PbLink::from_reader(&mut r, &link_msg)?;
+						node.links.push(link);
 					},
-					_ => {
-						return Err(DecodeError::UnexpectedBytes);
+					Ok(_) => return Err(DecodeError::UnexpectedBytes),
+					Err(err) => match err {
+						VarintReaderError::Io(io_err) if io_err.kind() == ErrorKind::UnexpectedEof => break,
+						_ => return Err(err.into()),
 					},
 				}
 			}
+
 			Ok(node)
 		}
 
@@ -137,7 +133,7 @@ mod tests {
 		test_helpers::{checksum, raw_conf, test_file},
 		unixfs::{FileSystemReader, FileSystemWriter},
 		Config,
-		WellKnownChunkSize::{F16KiB, F256KiB},
+		WellKnownChunkSize::{F16KiB, F1KiB, F256KiB},
 	};
 	use libipld::multihash::Sha2_256;
 	use std::path::Path;
@@ -145,6 +141,7 @@ mod tests {
 
 	#[test_case(raw_conf(F256KiB),"bitcoin.pdf", ""; "empty dir")]
 	#[test_case(raw_conf(F16KiB),"bitcoin.pdf", ""; "empty dir with 16KiB chunk")]
+	#[test_case(raw_conf(F1KiB),"bitcoin.pdf", ""; "empty dir with 1KiB chunk")]
 	#[test_case(raw_conf(F256KiB),"bitcoin.pdf", "/"; "root dir")]
 	#[test_case(raw_conf(F256KiB),"bitcoin.pdf", "./"; "current dir")]
 	#[test_case(raw_conf(F256KiB),"bitcoin.pdf", "./.."; "current dir, parent")]

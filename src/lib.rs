@@ -3,7 +3,7 @@ use derive_more::From;
 use std::num::NonZeroUsize;
 
 pub mod unixfs;
-pub use unixfs::{FileSystemWriter, PbLink, PbNode, UnixFs};
+pub use unixfs::{FileSystemReader, FileSystemWriter, PbLink, PbNode, UnixFs};
 
 mod flat_iterator;
 pub use flat_iterator::{FlatIterErr, FlatIterator};
@@ -44,9 +44,21 @@ impl From<CidCodec> for u64 {
 pub enum WellKnownChunkSize {
 	F32B = 32,
 	F512B = 512,
-	F1KiB = 1024,
-	F16KiB = 16384,
-	F256KiB = 262144,
+	F1KiB = 1_024,
+	F16KiB = 16_384,
+	F256KiB = 262_144,
+	#[cfg(feature = "jumbo-chunks")]
+	F1MiB = 1_048_576,
+	#[cfg(feature = "jumbo-chunks")]
+	F8MiB = 8_388_608,
+	#[cfg(feature = "jumbo-chunks")]
+	F32MiB = 33_554_432,
+	#[cfg(feature = "jumbo-chunks")]
+	F128MiB = 134_217_728,
+	#[cfg(feature = "jumbo-chunks")]
+	F256MiB = 268_435_456,
+	#[cfg(feature = "jumbo-chunks")]
+	F512MiB = 536_870_912,
 }
 
 #[derive(Clone, Copy, From)]

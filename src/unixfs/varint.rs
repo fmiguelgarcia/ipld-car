@@ -122,4 +122,13 @@ impl<'a, R: Read> VarintRead<'a, R> {
 	pub fn read_message(&mut self) -> VarResult<Vec<u8>> {
 		self.read_len_varint()
 	}
+
+	pub fn next_tag(&mut self) -> VarResult<u32> {
+		self.read_varint32()
+	}
+
+	#[inline]
+	pub fn read_bytes(&mut self) -> VarResult<Vec<u8>> {
+		self.read_len_varint()
+	}
 }
