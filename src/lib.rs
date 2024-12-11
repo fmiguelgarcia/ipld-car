@@ -3,7 +3,7 @@ use derive_more::From;
 use std::num::NonZeroUsize;
 
 pub mod unixfs;
-pub use unixfs::{FileSystemReader, FileSystemWriter, PbLink, PbNode, UnixFs};
+pub use unixfs::{FileSystemReader, FileSystemWriter, FileSystemWriterError, PbLink, PbNode, UnixFs};
 
 mod flat_iterator;
 pub use flat_iterator::{FlatIterErr, FlatIterator};

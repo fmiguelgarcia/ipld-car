@@ -17,7 +17,7 @@ use std::{
 use thiserror_no_std::Error;
 
 #[derive(Debug, Error)]
-pub enum UnixFsBuilderErr {
+pub enum FileSystemWriterError {
 	FlatIter(#[from] FlatIterErr),
 	Io(#[from] IoError),
 	NoChunks,
@@ -62,7 +62,7 @@ impl<R> FileSystemWriter<R>
 where
 	R: Read + Seek,
 {
-	pub fn build(self) -> Result<UnixFs<R>, UnixFsBuilderErr> {
+	pub fn build(self) -> Result<UnixFs<R>, FileSystemWriterError> {
 		debug_assert!(self.paths.len() < 2, "No more than one file allowed");
 		assert!(self.config.leaf_policy == LeafPolicy::Raw, "Only Raw leaf policy supported");
 
@@ -81,10 +81,10 @@ where
 			.map(|mut chunker_with_cid| {
 				let links = chunker_with_cid.try_fold(vec![], |mut links, result_inner| {
 					let (cid, chunk) = result_inner?;
-					let size: u64 = chunk.len().try_into().map_err(|_| UnixFsBuilderErr::ChunkTooBig)?;
+					let size: u64 = chunk.len().try_into().map_err(|_| FileSystemWriterError::ChunkTooBig)?;
 					let link = pb::link::new(cid, size);
 					links.push(link);
-					Ok::<_, UnixFsBuilderErr>(links)
+					Ok::<_, FileSystemWriterError>(links)
 				})?;
 
 				// Recover the original reader, and rewind it to the beginning.
@@ -92,14 +92,14 @@ where
 				data_reader.rewind()?;
 
 				let (cid, maybe_node, data_len) = from_links(links);
-				Ok::<_, UnixFsBuilderErr>((cid, maybe_node, data_reader, data_len))
+				Ok::<_, FileSystemWriterError>((cid, maybe_node, data_reader, data_len))
 			})
 			.collect::<Result<Vec<_>, _>>()?;
 		debug_assert!(file_cids.len() == 1, "Only one file allowed");
 
-		let (cid, maybe_node, data_reader, data_len) = file_cids.pop().ok_or(UnixFsBuilderErr::NoChunks)?;
+		let (cid, maybe_node, data_reader, data_len) = file_cids.pop().ok_or(FileSystemWriterError::NoChunks)?;
 
-		UnixFs::new(cid, maybe_node, data_reader, data_len).ok_or(UnixFsBuilderErr::PackageTooBig)
+		UnixFs::new(cid, maybe_node, data_reader, data_len).ok_or(FileSystemWriterError::PackageTooBig)
 	}
 }
 

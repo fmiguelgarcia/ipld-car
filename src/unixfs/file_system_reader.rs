@@ -70,7 +70,7 @@ pub struct FileSystemReader<R> {
 }
 
 impl<R: Read + Seek> FileSystemReader<R> {
-	pub fn load<H: Read>(cid: Cid, mut header: H, mut reader: R) -> Result<Self, Error> {
+	pub fn load_from_parts<H: Read>(cid: Cid, mut header: H, mut reader: R) -> Result<Self, Error> {
 		let codec = CidCodec::try_from(cid.codec()).map_err(|_| Error::UnsupportedCIDCodec)?;
 		let metadata = match codec {
 			CidCodec::Raw => {
@@ -78,20 +78,47 @@ impl<R: Read + Seek> FileSystemReader<R> {
 				MetadataFile::new(0, Data::file(file_size))
 			},
 			CidCodec::DagPb => {
-				let node = pb::node::decode(&mut header)?;
-
-				let unixfs_enc = node.data.as_ref().ok_or(Error::MissingPbNodeData)?;
-				let unixfs = Data::decode(unixfs_enc.as_ref())?;
-
+				let unixfs = Self::load_dag_pg(&mut header)?;
 				debug_assert_eq!(unixfs.filesize, reader.seek(SeekFrom::End(0)).ok());
 				debug_assert!(reader.rewind().is_ok());
-				debug_assert_eq!(unixfs.r#type, DataType::File as i32, "Only UnixFs file type is supported");
+
 				MetadataFile::new(0, unixfs)
 			},
 		};
 
 		let root = Map::from([("".into(), metadata.into())]);
 		Ok(Self { root: root.into(), reader: Some(reader) })
+	}
+
+	pub fn load(cid: Cid, mut reader: R) -> Result<Self, Error> {
+		let codec = CidCodec::try_from(cid.codec()).map_err(|_| Error::UnsupportedCIDCodec)?;
+		let metadata = match codec {
+			CidCodec::Raw => {
+				let file_size = reader.seek(SeekFrom::End(0))?;
+				MetadataFile::new(0, Data::file(file_size))
+			},
+			CidCodec::DagPb => {
+				let unixfs = Self::load_dag_pg(&mut reader)?;
+				let offset = reader.stream_position()?;
+				debug_assert_eq!(unixfs.filesize, reader.seek(SeekFrom::End(0)).ok());
+				debug_assert!(reader.rewind().is_ok());
+
+				MetadataFile::new(offset, unixfs)
+			},
+		};
+
+		let root = Map::from([("".into(), metadata.into())]);
+		Ok(Self { root: root.into(), reader: Some(reader) })
+	}
+
+	fn load_dag_pg<H: Read>(reader: &mut H) -> Result<Data, Error> {
+		let node = pb::node::decode(reader)?;
+
+		let unixfs_enc = node.data.as_ref().ok_or(Error::MissingPbNodeData)?;
+		let unixfs = Data::decode(unixfs_enc.as_ref())?;
+
+		debug_assert_eq!(unixfs.r#type, DataType::File as i32, "Only UnixFs file type is supported");
+		Ok(unixfs)
 	}
 
 	fn get_fs_entry<P: AsRef<Path>>(&self, path: P) -> Option<&FsEntry> {

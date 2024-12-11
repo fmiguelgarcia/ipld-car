@@ -7,7 +7,7 @@ pub mod file_system_reader;
 pub mod file_system_writer;
 pub mod proto;
 pub use file_system_reader::FileSystemReader;
-pub use file_system_writer::FileSystemWriter;
+pub use file_system_writer::{FileSystemWriter, FileSystemWriterError};
 pub mod varint;
 pub use varint::{VarintRead, VarintReaderError};
 
@@ -88,6 +88,24 @@ pub(crate) mod pb {
 			buf
 		}
 
+		/// # Protobuf Strictness
+		/// DAG-PB aims to have a canonical form for any given set of data. Therefore, in addition to the standard
+		/// Protobuf parsing rules, DAG-PB decoders should enforce additional constraints to ensure canonical forms
+		/// (where possible):
+		///
+		/// Fields in the PBLink message must appear in the order as defined by the Protobuf schema above, following the
+		/// field numbers. Blocks with out-of-order PBLink fields should be rejected. (Note that it is common for
+		/// Protobuf decoders to accept out-of-order field entries, which means the DAG-PB spec is somewhat stricter
+		/// than may be seen as typical for other Protobuf-based formats.)
+		///
+		///Fields in the PBNode message must be encoded in the order as defined by the Protobuf schema above. Note that
+		/// this order does not follow the field numbers. The decoder should accept either order, as IPFS data exists in
+		/// both forms. Duplicate entries in the binary form are invalid; blocks with duplicate field values should be
+		/// rejected. (Note that it is common for Protobuf decoders to accept repeated field values in the binary data,
+		/// and interpret them as updates to fields that have already been set; DAG-PB is stricter than this.)
+		/// Fields and wire types other than those that appear in the Protobuf schema above are invalid and blocks
+		/// containing these should be rejected. (Note that it is common for Protobuf decoders to skip data in each
+		/// message type that does not match the fields in the schema.)
 		pub(crate) fn decode<R: Read>(reader: &mut R) -> Result<PbNode, DecodeError> {
 			let mut var_reader = VarintRead::new(reader);
 			let mut node = PbNode::default();
@@ -97,12 +115,15 @@ pub(crate) mod pb {
 					Ok(10) => {
 						let data: Bytes = var_reader.read_bytes()?.into();
 						node.data = Some(data);
+						// Note: `Data` field is the last one.
+						break;
 					},
 					Ok(18) => {
 						let link_msg: Bytes = var_reader.read_message()?.into();
 						let mut r = ProtoBytesReader::from_bytes(&link_msg);
 						let link = PbLink::from_reader(&mut r, &link_msg)?;
 						node.links.push(link);
+						debug_assert!(node.data.is_none(), "Links must be encoded before `Data` field.");
 					},
 					Ok(_) => return Err(DecodeError::UnexpectedBytes),
 					Err(err) => match err {
@@ -158,7 +179,7 @@ mod tests {
 		let cid = unixfs.cid;
 		let (header, data) = unixfs.package_reader().into_inner();
 
-		let fs = FileSystemReader::load(cid, header, data).expect("Valid package reader .qed");
+		let fs = FileSystemReader::load_from_parts(cid, header, data).expect("Valid package reader .qed");
 		let paths = fs.read_dir(read_dir_at);
 		assert_eq!(paths.as_slice(), &[&Path::new("")]);
 		let path = paths.into_iter().next().cloned().expect("Path exists inside the FS .qed");
