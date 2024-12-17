@@ -11,17 +11,22 @@ use libipld::{
 use prost::Message;
 use std::{
 	collections::HashMap as Map,
-	io::{Error as IoError, Read, Seek},
+	io::{self, Read},
 	path::{Path, PathBuf},
 };
 use thiserror_no_std::Error;
 
 #[derive(Debug, Error)]
 pub enum FileSystemWriterError {
+	#[error(transparent)]
+	Io(#[from] io::Error),
+	#[error(transparent)]
 	FlatIter(#[from] FlatIterErr),
-	Io(#[from] IoError),
-	NoChunks,
+	#[error("Chunk size cannot be converted into u64")]
 	ChunkTooBig,
+	#[error("No chunks were created")]
+	NoChunks,
+	#[error("Package too big to allocated into a UnixFs")]
 	PackageTooBig,
 }
 
@@ -60,7 +65,7 @@ impl<R> FileSystemWriter<R> {
 
 impl<R> FileSystemWriter<R>
 where
-	R: Read + Seek,
+	R: Read,
 {
 	pub fn build(self) -> Result<UnixFs<R>, FileSystemWriterError> {
 		debug_assert!(self.paths.len() < 2, "No more than one file allowed");
@@ -87,9 +92,8 @@ where
 					Ok::<_, FileSystemWriterError>(links)
 				})?;
 
-				// Recover the original reader, and rewind it to the beginning.
-				let mut data_reader = chunker_with_cid.into_inner().into_inner();
-				data_reader.rewind()?;
+				// Recover the original reader
+				let data_reader = chunker_with_cid.into_inner().into_inner();
 
 				let (cid, maybe_node, data_len) = from_links(links);
 				Ok::<_, FileSystemWriterError>((cid, maybe_node, data_reader, data_len))

@@ -2,7 +2,7 @@ use bytes::{Bytes, BytesMut};
 use derive_more::Constructor;
 use libipld::multihash::Error as MultihashError;
 use std::{
-	io::{Error as IoError, Read},
+	io::{self, Read},
 	num::NonZeroUsize,
 };
 use thiserror_no_std::Error;
@@ -49,8 +49,11 @@ impl<R: Read> Iterator for FlatIterator<R> {
 
 #[derive(Debug, Error)]
 pub enum FlatIterErr {
+	#[error("End-of-file reached")]
 	Eof,
-	Io(#[from] IoError),
+	#[error(transparent)]
+	Io(#[from] io::Error),
+	#[error(transparent)]
 	Multihash(#[from] MultihashError),
 }
 

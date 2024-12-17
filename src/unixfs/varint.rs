@@ -3,9 +3,10 @@ use thiserror_no_std::Error;
 
 #[derive(Debug, Error)]
 pub enum VarintReaderError {
-	Varint,
+	#[error("Cannot read more than 10 bytes on varint32")]
+	MoreThan10Bytes,
+	#[error(transparent)]
 	Io(#[from] IoError),
-	Ufg8(#[from] std::string::FromUtf8Error),
 }
 
 pub type VarResult<T> = std::result::Result<T, VarintReaderError>;
@@ -108,7 +109,7 @@ impl<'a, R: Read> VarintRead<'a, R> {
 		}
 
 		// cannot read more than 10 bytes
-		Err(VarintReaderError::Varint)
+		Err(VarintReaderError::MoreThan10Bytes)
 	}
 
 	fn read_len_varint(&mut self) -> VarResult<Vec<u8>> {

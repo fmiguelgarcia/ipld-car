@@ -55,11 +55,16 @@ impl FsEntry {
 
 #[derive(Error, Debug)]
 pub enum Error {
-	UnsupportedCIDCodec,
+	#[error(transparent)]
 	Io(#[from] std::io::Error),
+	#[error(transparent)]
 	PbNode(#[from] pb::DecodeError),
-	MissingPbNodeData,
+	#[error(transparent)]
 	Prost(#[from] prost::DecodeError),
+	#[error("Missing PbNode data field")]
+	MissingPbNodeData,
+	#[error("Unsupported CID Codec: {0}")]
+	UnsupportedCIDCodec(u64),
 }
 
 #[derive(Debug)]
@@ -71,7 +76,7 @@ pub struct FileSystemReader<R> {
 
 impl<R: Read + Seek> FileSystemReader<R> {
 	pub fn load_from_parts<H: Read>(cid: Cid, mut header: H, mut reader: R) -> Result<Self, Error> {
-		let codec = CidCodec::try_from(cid.codec()).map_err(|_| Error::UnsupportedCIDCodec)?;
+		let codec = CidCodec::try_from(cid.codec()).map_err(|_| Error::UnsupportedCIDCodec(cid.codec()))?;
 		let metadata = match codec {
 			CidCodec::Raw => {
 				let file_size = reader.seek(SeekFrom::End(0))?;
@@ -91,7 +96,7 @@ impl<R: Read + Seek> FileSystemReader<R> {
 	}
 
 	pub fn load(cid: Cid, mut reader: R) -> Result<Self, Error> {
-		let codec = CidCodec::try_from(cid.codec()).map_err(|_| Error::UnsupportedCIDCodec)?;
+		let codec = CidCodec::try_from(cid.codec()).map_err(|_| Error::UnsupportedCIDCodec(cid.codec()))?;
 		let metadata = match codec {
 			CidCodec::Raw => {
 				let file_size = reader.seek(SeekFrom::End(0))?;
@@ -100,7 +105,6 @@ impl<R: Read + Seek> FileSystemReader<R> {
 			CidCodec::DagPb => {
 				let unixfs = Self::load_dag_pg(&mut reader)?;
 				let offset = reader.stream_position()?;
-				debug_assert_eq!(unixfs.filesize, reader.seek(SeekFrom::End(0)).ok());
 				debug_assert!(reader.rewind().is_ok());
 
 				MetadataFile::new(offset, unixfs)

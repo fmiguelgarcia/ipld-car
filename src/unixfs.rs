@@ -1,12 +1,12 @@
 use bytes::{buf::Reader, Buf as _, Bytes};
 use libipld::Cid;
 use quick_protobuf::MessageWrite as _;
-use std::io::{Chain, Read};
+use std::io::{Chain, Read, Seek};
 
 pub mod file_system_reader;
 pub mod file_system_writer;
 pub mod proto;
-pub use file_system_reader::FileSystemReader;
+pub use file_system_reader::{Error as FileSystemReaderError, FileSystemReader};
 pub use file_system_writer::{FileSystemWriter, FileSystemWriterError};
 pub mod varint;
 pub use varint::{VarintRead, VarintReaderError};
@@ -35,14 +35,14 @@ impl<R> UnixFs<R> {
 	}
 }
 
-impl<R: Read> UnixFs<R> {
-	pub fn package_reader(self) -> Chain<Reader<Bytes>, R> {
+impl<R: Read + Seek> UnixFs<R> {
+	pub fn package_reader(mut self) -> Chain<Reader<Bytes>, R> {
+		let _ = self.data.rewind().expect("Rewind failed on data");
 		let header = self.node.as_ref().map(|node| Bytes::from(pb::node::encode(node))).unwrap_or_default();
 		header.reader().chain(self.data)
 	}
 }
 
-// pub use proto::{PbLink, PbNode};
 pub use libipld::pb::{PbLink, PbNode};
 
 pub(crate) mod pb {
@@ -51,9 +51,11 @@ pub(crate) mod pb {
 
 	#[derive(Debug, Error)]
 	pub enum DecodeError {
+		#[error(transparent)]
 		VarintReader(#[from] VarintReaderError),
+		#[error(transparent)]
 		QuickProtobuf(#[from] quick_protobuf::Error),
-		DuplicateLinks,
+		#[error("Unexpected bytes")]
 		UnexpectedBytes,
 	}
 
