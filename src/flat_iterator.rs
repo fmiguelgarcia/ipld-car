@@ -5,7 +5,7 @@ use std::{
 	io::{self, Read},
 	num::NonZeroUsize,
 };
-use thiserror_no_std::Error;
+use thiserror::Error;
 
 /// Iterate over a reader in order to produce fixed-size chunks.
 /// There is no limit on the number of chunks produced, so it is called "flat", following the UnixFS FlatDAG naming

@@ -4,21 +4,25 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bytes = "1.8.0"
-derive_builder = "0.20.2"
-derive_more = { version = "1.0.0", features = ["from", "constructor"] }
-libipld = "0.16.0"
-prost = "0.13.3"
-quick-protobuf = "0.8.1"
-thiserror-no-std = "2.0.2"
-tracing = "0.1.40"
+bytes = { version = "1.8.0", default-features = false }
+derive_builder = { version = "0.20.2", default-features = false }
+derive_more = { version = "2", default-features = false, features = ["from", "constructor"] }
+
+# Error & logs
+thiserror = { version = "2.0.11", default-features = false }
+tracing = { version = "0.1.40", default-features = false }
+
+# Proto
+libipld = { version = "0.16.0", default-features = false, features = ["dag-pb", "dag-json"] }
+prost = { version = "0.13.3", default-features = false, features = ["derive"] }
+quick-protobuf = { version = "0.8.1", default-features = false }
 
 [build-dependencies]
 prost-build = "0.13.3"
 
 [dev-dependencies]
 criterion = "0.5.1"
-rand = "0.8.4"
+rand = "0.8"
 tempfile = "3.2.0"
 test-case = "3.3.1"
 test-log = { version = "0.2.16", features = ["trace"] }
@@ -28,5 +32,6 @@ name = "fs_reader"
 harness = false
 
 [features]
-default = ["jumbo-chunks"]
+default = ["jumbo-chunks", "std"]
 jumbo-chunks = []
+std = ["bytes/std", "derive_builder/std", "prost/std"]

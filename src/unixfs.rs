@@ -47,7 +47,7 @@ pub use libipld::pb::{PbLink, PbNode};
 
 pub(crate) mod pb {
 	use crate::unixfs::{VarintRead, VarintReaderError};
-	use thiserror_no_std::Error;
+	use thiserror::Error;
 
 	#[derive(Debug, Error)]
 	pub enum DecodeError {

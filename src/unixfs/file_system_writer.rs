@@ -14,7 +14,7 @@ use std::{
 	io::{self, Read},
 	path::{Path, PathBuf},
 };
-use thiserror_no_std::Error;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum FileSystemWriterError {

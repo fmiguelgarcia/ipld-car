@@ -1,5 +1,5 @@
 use std::io::{Error as IoError, Read};
-use thiserror_no_std::Error;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum VarintReaderError {

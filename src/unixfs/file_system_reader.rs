@@ -15,7 +15,7 @@ use std::{
 	io::{Read, Seek, SeekFrom, Take},
 	path::{Component, Path, PathBuf},
 };
-use thiserror_no_std::Error;
+use thiserror::Error;
 use tracing::{trace, warn};
 
 #[derive(Debug, Constructor, Clone)]
@@ -59,12 +59,19 @@ pub enum Error {
 	Io(#[from] std::io::Error),
 	#[error(transparent)]
 	PbNode(#[from] pb::DecodeError),
-	#[error(transparent)]
-	Prost(#[from] prost::DecodeError),
+	#[cfg_attr(feature = "std", error(transparent))]
+	#[cfg_attr(not(feature = "std"), error("Prost decode error: {0:?}"))]
+	Prost(prost::DecodeError),
 	#[error("Missing PbNode data field")]
 	MissingPbNodeData,
 	#[error("Unsupported CID Codec: {0}")]
 	UnsupportedCIDCodec(u64),
+}
+
+impl From<prost::DecodeError> for Error {
+	fn from(err: prost::DecodeError) -> Self {
+		Error::Prost(err)
+	}
 }
 
 #[derive(Debug)]

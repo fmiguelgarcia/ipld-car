@@ -1,4 +1,3 @@
-use derive_builder::Builder;
 use derive_more::From;
 use std::num::NonZeroUsize;
 
@@ -105,13 +104,14 @@ pub enum LayerRepeats {
 	LR16 = 16,
 }
 
-#[derive(Builder, Clone, Copy)]
+#[derive(Clone, Copy)]
+#[cfg_attr(feature = "std", derive(derive_builder::Builder))]
 pub struct Config {
-	#[builder(default = "ChunkPolicy::FixedSize(WellKnownChunkSize::F256KiB)")]
+	#[cfg_attr(feature = "std", builder(default = "ChunkPolicy::FixedSize(WellKnownChunkSize::F256KiB)"))]
 	pub chunk_policy: ChunkPolicy,
-	#[builder(default = "LeafPolicy::Raw")]
+	#[cfg_attr(feature = "std", builder(default = "LeafPolicy::Raw"))]
 	pub leaf_policy: LeafPolicy,
-	#[builder(default = "DAGLayout::Flat")]
+	#[cfg_attr(feature = "std", builder(default = "DAGLayout::Flat"))]
 	pub layout: DAGLayout,
 }
 
