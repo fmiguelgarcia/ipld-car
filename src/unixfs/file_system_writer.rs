@@ -85,7 +85,7 @@ where
 			.into_iter()
 			.map(|mut chunker_with_cid| {
 				let links = chunker_with_cid.try_fold(vec![], |mut links, result_inner| {
-					let (cid, chunk) = result_inner?;
+					let (chunk, cid) = result_inner?;
 					let size: u64 = chunk.len().try_into().map_err(|_| FileSystemWriterError::ChunkTooBig)?;
 					let link = pb::link::new(cid, size);
 					links.push(link);
@@ -127,7 +127,7 @@ where
 	}
 }
 
-fn from_links(mut links: Vec<PbLink>) -> (Cid, Option<PbNode>, u64) {
+pub fn from_links(mut links: Vec<PbLink>) -> (Cid, Option<PbNode>, u64) {
 	match links.len() {
 		0 => (Cid::new_v1(Raw.into(), Code::Sha2_256.digest(&[])), None, 0),
 		1 => {

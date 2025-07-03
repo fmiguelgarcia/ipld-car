@@ -3,13 +3,17 @@ use libipld::Cid;
 use quick_protobuf::MessageWrite as _;
 use std::io::{Chain, Read, Seek};
 
+pub mod file_reader;
 pub mod file_system_reader;
 pub mod file_system_writer;
 pub mod proto;
+pub use file_reader::FileReader;
 pub use file_system_reader::{Error as FileSystemReaderError, FileSystemReader};
 pub use file_system_writer::{FileSystemWriter, FileSystemWriterError};
 pub mod varint;
 pub use varint::{VarintRead, VarintReaderError};
+
+pub const SELF_PATH: &str = ".";
 
 pub struct UnixFs<R> {
 	pub cid: Cid,
@@ -37,7 +41,7 @@ impl<R> UnixFs<R> {
 
 impl<R: Read + Seek> UnixFs<R> {
 	pub fn package_reader(mut self) -> Chain<Reader<Bytes>, R> {
-		let _ = self.data.rewind().expect("Rewind failed on data");
+		self.data.rewind().expect("Rewind failed on data");
 		let header = self.node.as_ref().map(|node| Bytes::from(pb::node::encode(node))).unwrap_or_default();
 		header.reader().chain(self.data)
 	}
@@ -171,7 +175,7 @@ mod tests {
 	fn file_system_tools<P, R>(conf: Config, file: P, read_dir_at: R)
 	where
 		P: AsRef<Path>,
-		R: AsRef<Path>,
+		R: AsRef<Path> + std::fmt::Debug,
 	{
 		let original_fs_md5 = checksum::<Sha2_256, _>(test_file(&file));
 		let reader = test_file(&file);
@@ -181,11 +185,8 @@ mod tests {
 		let cid = unixfs.cid;
 		let (header, data) = unixfs.package_reader().into_inner();
 
-		let fs = FileSystemReader::load_from_parts(cid, header, data).expect("Valid package reader .qed");
-		let paths = fs.read_dir(read_dir_at);
-		assert_eq!(paths.as_slice(), &[&Path::new("")]);
-		let path = paths.into_iter().next().cloned().expect("Path exists inside the FS .qed");
-		let file_reader = fs.read(path).unwrap();
+		let fs = FileSystemReader::load_from_parts(cid, data, header).expect("Valid package reader .qed");
+		let file_reader = fs.read(read_dir_at).unwrap();
 
 		let fs_md5 = checksum::<Sha2_256, _>(file_reader);
 		assert_eq!(original_fs_md5, fs_md5);
