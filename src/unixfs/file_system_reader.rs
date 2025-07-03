@@ -16,7 +16,6 @@ use std::{
 	fmt::Debug,
 	fs::File,
 	io::{Read, Seek, SeekFrom, Take},
-	mem,
 	path::{Component, Path, PathBuf},
 };
 use thiserror::Error;
@@ -61,20 +60,18 @@ impl<R: Read + Seek> FileSystemReader<R> {
 	pub fn load_from_parts<H: Read>(cid: Cid, mut reader: R, header: H) -> Result<Self, Error> {
 		let codec = CidCodec::try_from(cid)?;
 		let metadata = Self::load_metadata(codec, &mut reader, Some(header))?;
-		let self_path = PathBuf::from(Path::new(SELF_PATH));
-		let root = Map::from([(self_path, metadata.into())]);
+		let root = FsEntry::make_root(metadata);
 
-		Ok(Self { root: root.into(), reader: Some(reader), codec })
+		Ok(Self { root, reader: Some(reader), codec })
 	}
 
 	/// Loads a file system from the given `cid` and `reader`.
 	pub fn load(cid: Cid, mut reader: R) -> Result<Self, Error> {
 		let codec = CidCodec::try_from(cid)?;
 		let metadata = Self::load_metadata::<File>(codec, &mut reader, None)?;
-		let self_path = PathBuf::from(Path::new(SELF_PATH));
-		let root = Map::from([(self_path, metadata.into())]);
+		let root = FsEntry::make_root(metadata);
 
-		Ok(Self { root: root.into(), reader: Some(reader), codec })
+		Ok(Self { root, reader: Some(reader), codec })
 	}
 
 	fn load_dag_pg<H: Read>(reader: &mut H) -> Result<Data, Error> {
@@ -204,13 +201,14 @@ impl<R: Read + Seek> FileSystemReader<R> {
 
 		// 1. Check metadata.
 		let actual_metadata = Self::load_metadata::<File>(self.codec, reader, None)?;
-		let actual_root = actual_metadata.into();
+		let actual_root = FsEntry::make_root(actual_metadata);
+
 		if self.root != actual_root {
 			return Err(Error::MetadataNotMatched);
 		}
 
 		// 2. Check content.
-		let self_root = mem::take(&mut self.root);
+		let self_root = self.root.clone();
 		let self_root_dir = self_root.as_dir().ok_or(Error::MissingRootFolder)?;
 		let file_cids = self_root_dir
 			.iter()
@@ -235,7 +233,6 @@ impl<R: Read + Seek> FileSystemReader<R> {
 				Ok(cid)
 			})
 			.collect::<Result<Vec<_>, _>>();
-		self.root = self_root;
 		let file_cids = file_cids?;
 
 		debug_assert_eq!(file_cids.len(), 1, "Only one file expected in root directory");
@@ -249,13 +246,19 @@ pub struct MetadataFile {
 	unixfs: Data,
 }
 
-#[derive(From, Debug, PartialEq)]
+#[derive(From, Debug, PartialEq, Clone)]
 pub enum FsEntry {
 	File(MetadataFile),
 	Dir(Map<PathBuf, FsEntry>),
 }
 
 impl FsEntry {
+	/// TODO: Only one file is supported in the root directory.
+	pub fn make_root(file: MetadataFile) -> Self {
+		let path = PathBuf::from(Path::new(SELF_PATH));
+		Self::Dir(Map::from([(path, FsEntry::File(file))]))
+	}
+
 	pub fn get<P: AsRef<Path>>(&self, name: P) -> Option<&FsEntry> {
 		match self {
 			Self::Dir(dir) => dir.get(name.as_ref()),
