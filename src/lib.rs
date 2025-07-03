@@ -1,5 +1,7 @@
 pub mod config;
-pub use config::{ChunkPolicy, Config, ConfigBuilder, ConfigBuilderError, DAGLayout, LeafPolicy, WellKnownChunkSize};
+pub use config::{ChunkPolicy, Config, DAGLayout, LeafPolicy, WellKnownChunkSize};
+#[cfg(feature = "std")]
+pub use config::{ConfigBuilder, ConfigBuilderError};
 
 pub mod unixfs;
 use thiserror::Error;
