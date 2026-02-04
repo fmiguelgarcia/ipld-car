@@ -238,6 +238,10 @@ impl<R: Read + Seek> FileSystemReader<R> {
 		debug_assert_eq!(file_cids.len(), 1, "Only one file expected in root directory");
 		file_cids.first().cloned().ok_or(Error::MissingRootFolder)
 	}
+
+	pub fn into_inner(self) -> R {
+		self.reader.unwrap()
+	}
 }
 
 #[derive(Debug, Constructor, Clone, PartialEq)]
