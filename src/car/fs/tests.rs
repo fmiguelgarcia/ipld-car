@@ -1,9 +1,13 @@
 use crate::{
-	car::{fs::CarFs, ContentAddressableArchive},
+	car::{block_content::BlockContent, fs::CarFs, ContentAddressableArchive},
+	dag_pb::DagPb,
+	fail,
 	test_helpers::test_file,
+	BoundedReader,
 };
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use libipld::Cid;
 use test_case::test_case;
 use vfs::FileSystem;
 
@@ -38,7 +42,6 @@ fn exp_hamt_entries() -> Vec<String> {
 #[test_case("fixtures.car", "/ą", ["ę"]; "4.2.3-1 Special characters in filenames 2/3" )]
 #[test_case("fixtures.car", "/ą/ę", ["file-źł.txt"]; "4.2.3-1 Special characters in filenames 3/3" )]
 #[test_case("dir-with-percent-encoded-filename.car", "/", ["Portugal%2C+España=Peninsula Ibérica.txt"]; "4.2.3-2 Special characters in filenames" )]
-#[test_case("bafybeigcsevw74ssldzfwhiijzmg7a35lssfmjkuoj2t5qs5u5aztj47tq.dag-pb", "/", ["audio_only.m4a", "chat.txt", "playback.m3u", "zoom_0.mp4"]; "4.2.4 Directory with Missing blocks" )]
 #[test_case("single-layer-hamt-with-multi-block-files.car", "/", exp_hamt_entries() => ignore["HAMT not yet supported"]; "4.2.5 HAMT Sharded Directory")]
 #[test_case("symlink.car", "/", ["bar", "foo"]; "4.3.3 Symbolic links")]
 #[test_case("subdir-with-mixed-block-files.car", "/", ["subdir"]; "4.3.4 Mixed Block Sizes 1/2")]
@@ -59,10 +62,24 @@ where
 	Ok(())
 }
 
-#[ignore = "Only for debug specific tests"]
-#[test]
-fn debug_vfs_directory() -> Result<()> {
-	vfs_directory("fixtures.car", "/", ["ą"])
+#[test_case("bafybeigcsevw74ssldzfwhiijzmg7a35lssfmjkuoj2t5qs5u5aztj47tq", ["audio_only.m4a", "chat.txt", "playback.m3u", "zoom_0.mp4"]; "4.2.4 Directory with Missing blocks" )]
+fn vfs_dag_directory<I, S>(name: &str, exp_dir_entries: I) -> Result<()>
+where
+	I: IntoIterator<Item = S>,
+	String: From<S>,
+{
+	let mut arena = Default::default();
+	let content = BoundedReader::from_reader(test_file(format!("{name}.dag-pb")))?;
+	let cid = name.parse::<Cid>()?;
+	let id = DagPb::load(&mut arena, cid, content)?;
+	let BlockContent::DagPb(ref dag_pb) = arena.get(id).unwrap().content else { fail!(anyhow!("It is not a DagPb")) };
+	let DagPb::Dir(entries) = dag_pb else { fail!(anyhow!("It is not a directory")) };
+
+	let dir_entries = entries.keys().cloned().collect::<Vec<_>>();
+	let exp_dir_entries = exp_dir_entries.into_iter().map(String::from).collect::<Vec<_>>();
+	assert_eq!(dir_entries, exp_dir_entries);
+
+	Ok(())
 }
 
 /*

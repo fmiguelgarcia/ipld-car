@@ -79,3 +79,9 @@ impl<T: ArenaIndexedItem> Arena<T> {
 		self.get_mut(id)
 	}
 }
+
+impl<T: ArenaIndexedItem> Default for Arena<T> {
+	fn default() -> Self {
+		Self { items: Vec::new(), index: BTreeMap::new() }
+	}
+}
