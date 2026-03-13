@@ -1,78 +1,49 @@
+use std::io::{Read, Seek, Write};
+
+pub mod arena;
+pub use arena::{Arena, ArenaId, ArenaIndexedItem};
+pub mod bounded_reader;
+pub use bounded_reader::{BoundedReader, BoundedReaderErr};
+pub mod car;
+pub use car::ContentAddressableArchive;
 pub mod config;
-pub use config::{ChunkPolicy, Config, DAGLayout, LeafPolicy, WellKnownChunkSize};
-#[cfg(feature = "std")]
-pub use config::{ConfigBuilder, ConfigBuilderError};
-
-pub mod unixfs;
-use thiserror::Error;
-pub use unixfs::{
-	file_system_writer::from_links, FileSystemReader, FileSystemReaderError, FileSystemWriter, FileSystemWriterError,
-	PbLink, PbNode, UnixFs,
-};
-
-mod flat_iterator;
-pub use flat_iterator::{FlatIterErr, FlatIterator};
-mod with_cid;
-pub use with_cid::{cid_from_reader, WithCid};
+pub mod dag_pb;
+pub mod error;
+pub(crate) mod proto;
 
 #[cfg(test)]
-mod test_helpers;
+pub(crate) mod test_helpers;
 
-// Reexport libipld
-pub use libipld::Cid;
+/// Trait combining Seek and Read, return value for opening files
+pub trait SeekAndRead: Seek + Read {}
+impl<T> SeekAndRead for T where T: Seek + Read {}
 
-#[derive(Clone, Copy, Debug)]
-pub enum CidCodec {
-	DagPb = 0x70,
-	Raw = 0x55,
+/// Trait combining Seek and Write, return value for writing files
+pub trait SeekAndWrite: Seek + Write {}
+impl<T> SeekAndWrite for T where T: Seek + Write {}
+
+// Helper macros
+// ============================================================================
+
+#[macro_export]
+macro_rules! fail {
+	( $y:expr ) => {{
+		return Err($y.into());
+	}};
 }
 
-#[derive(Error, Debug)]
-pub enum CidCodecError {
-	#[error("Unsupported CID codec: {0}")]
-	UnsupportedCodec(u64),
-}
-
-impl TryFrom<Cid> for CidCodec {
-	type Error = CidCodecError;
-
-	fn try_from(cid: Cid) -> Result<Self, Self::Error> {
-		let raw_codec = cid.codec();
-		Self::try_from(raw_codec).map_err(|_| CidCodecError::UnsupportedCodec(raw_codec))
-	}
-}
-
-impl TryFrom<u64> for CidCodec {
-	type Error = CidCodecError;
-
-	fn try_from(codec: u64) -> Result<Self, Self::Error> {
-		match codec {
-			0x70 => Ok(CidCodec::DagPb),
-			0x55 => Ok(CidCodec::Raw),
-			raw_codec => Err(CidCodecError::UnsupportedCodec(raw_codec)),
+#[macro_export]
+macro_rules! ensure {
+	( $x:expr) => {{
+		#[allow(clippy::neg_cmp_op_on_partial_ord)]
+		if !$x {
+			return false;
 		}
-	}
-}
-
-impl From<CidCodec> for u64 {
-	fn from(codec: CidCodec) -> u64 {
-		match codec {
-			CidCodec::DagPb => 0x70,
-			CidCodec::Raw => 0x55,
+	}};
+	( $x:expr, $y:expr $(,)? ) => {{
+		#[allow(clippy::neg_cmp_op_on_partial_ord)]
+		if !$x {
+			$crate::fail!($y);
 		}
-	}
-}
-
-#[derive(Clone, Copy)]
-pub enum MaxChildren {
-	C11 = 11,
-	C44 = 44,
-	C174 = 174,
-}
-
-#[derive(Clone, Copy)]
-pub enum LayerRepeats {
-	LR1 = 1,
-	LR4 = 4,
-	LR16 = 16,
+	}};
 }

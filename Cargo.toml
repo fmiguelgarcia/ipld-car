@@ -4,16 +4,41 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bytes = { version = "1.8.0", default-features = false }
+either = "1"
+tempfile = "3.2.0"
+bytes = { version = "1.8.0", default-features = false, features = ["serde"] }
 derive_builder = { version = "0.20.2", default-features = false }
-derive_more = { version = "2", default-features = false, features = ["from", "constructor"] }
+derive_more = { version = "2", default-features = false, features = [
+	"from",
+	"into",
+	"constructor",
+	"as_ref",
+	"deref",
+	"debug",
+] }
+num_enum = "0.7"
+nbytes = "0.1"
+
+# Serde 
+serde = "1"
+serde_bytes = "0.11"
+
+# VFS
+vfs = { version = "0.12.2", default-features = false, optional = true }
+
+# CAR v1 — CBOR header serialisation (only with std)
+ciborium = { version = "0.2", optional = true }
+leb128 = "0.2.5"
 
 # Error & logs
 thiserror = { version = "2.0.11", default-features = false }
 tracing = { version = "0.1.40", default-features = false }
 
 # Proto
-libipld = { version = "0.16.0", default-features = false, features = ["dag-pb", "dag-json"] }
+libipld = { version = "0.16.0", default-features = false, features = [
+	"dag-pb",
+	"dag-json",
+] }
 prost = { version = "0.13.3", default-features = false, features = ["derive"] }
 quick-protobuf = { version = "0.8.1", default-features = false }
 
@@ -23,15 +48,21 @@ prost-build = "0.13.3"
 [dev-dependencies]
 criterion = "0.5.1"
 rand = "0.8"
-tempfile = "3.2.0"
 test-case = "3.3.1"
 test-log = { version = "0.2.16", features = ["trace"] }
+humansize = "2.1.3"
+uom = { version = "0.37.0", features = ["usize", "si"] }
+anyhow = "1"
+multibase = "0.9"
+hex = "*"
 
-[[bench]]
-name = "fs_reader"
-harness = false
+
+# [[bench]]
+# name = "fs_reader"
+# harness = false
 
 [features]
-default = ["jumbo-chunks", "std"]
+default = ["std"]
 jumbo-chunks = []
-std = ["bytes/std", "derive_builder/std", "prost/std"]
+vfs = ["dep:vfs"]
+std = ["bytes/std", "dep:ciborium", "derive_builder/std", "prost/std", "vfs"]
