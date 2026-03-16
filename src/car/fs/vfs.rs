@@ -6,6 +6,7 @@ use crate::{
 };
 
 use std::{
+	ffi::OsStr,
 	fmt::Debug,
 	io::{Read, Seek},
 	path::Path,
@@ -35,32 +36,14 @@ where
 		}
 	}
 
-	fn create_dir(&self, _path: &str) -> VfsResult<()> {
-		Err(VfsErrorKind::NotSupported.into())
-		/*
+	fn create_dir(&self, path: &str) -> VfsResult<()> {
 		let path = Path::new(path);
 		let dir_name = path.file_name().and_then(OsStr::to_str).ok_or(VfsErrorKind::InvalidPath)?;
 		let parent_path = path.parent().unwrap_or_else(|| Path::new("."));
 
 		let mut car = car_lock(&self.car)?;
-		let next_entry_id = car.arena.next_id();
-		let found_parent = path_to_mut_block(&mut car, parent_path)?;
-
-		match &mut found_parent.content {
-			CarEntryContent::Dir(dir_entries) =>
-				if !dir_entries.contains_key(dir_name) {
-					dir_entries.insert(dir_name.to_string(), next_entry_id);
-				} else {
-					fail!(VfsErrorKind::DirectoryExists)
-				},
-			_ => fail!(VfsErrorKind::InvalidPath),
-		};
-
-		let new_dir_entry = CarEntry::new(None, None, CarEntryContent::Dir(Default::default()));
-		let added_id = car.arena.push(new_dir_entry);
-		debug_assert_eq!(added_id, next_entry_id);
+		car.create_dir(parent_path, dir_name)?;
 		Ok(())
-		*/
 	}
 
 	fn open_file(&self, path: &str) -> VfsResult<Box<dyn SeekAndRead + Send>> {

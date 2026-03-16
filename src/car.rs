@@ -21,7 +21,7 @@ use crate::{
 	config::{CidCodec, Config},
 	dag_pb::DagPb,
 	ensure,
-	error::{InvalidErr, CidErr, Error, NotFoundErr, Result},
+	error::{CidErr, Error, InvalidErr, NotFoundErr, Result},
 	fail, BoundedReader,
 };
 
@@ -53,9 +53,13 @@ pub struct ContentAddressableArchive<T> {
 // ===========================================================================
 
 #[cfg(feature = "vfs")]
+use crate::dag_pb::{dir_cid, Link};
+#[cfg(feature = "vfs")]
 use crate::error::NotSupportedErr;
 #[cfg(feature = "vfs")]
 use block_content::BlockContent;
+#[cfg(feature = "vfs")]
+use std::collections::BTreeMap;
 #[cfg(feature = "vfs")]
 use std::path::{Component, Path};
 #[cfg(feature = "vfs")]
@@ -79,8 +83,10 @@ impl<T> ContentAddressableArchive<T> {
 						let block = self.arena.get(*block_id).expect("Invalid block ID");
 						if let BlockContent::DagPb(DagPb::Dir(dir_entries)) = &block.content {
 							if let Some(link) = dir_entries.get(name).cloned() {
-								let new_block_id =
-									self.arena.get_id_by_index(&link.cid).ok_or(NotFoundErr::CidOnDirEntry)?;
+								let new_block_id = link
+									.arena_id
+									.or_else(|| self.arena.get_id_by_index(&link.cid))
+									.ok_or(NotFoundErr::CidOnDirEntry)?;
 								new_level.push(new_block_id);
 							}
 						}
@@ -102,6 +108,41 @@ impl<T> ContentAddressableArchive<T> {
 		let found_ids = self.path_to_block_ids(path)?;
 		ensure!(found_ids.len() < 2, Error::more_than_one(found_ids.len(), path));
 		found_ids.first().copied().ok_or_else(|| Error::from(NotFoundErr::Path))
+	}
+
+	/// Creates a new empty directory at `parent_path/dir_name`.
+	pub(crate) fn create_dir(&mut self, parent_path: &Path, dir_name: &str) -> Result<()> {
+		let parent_id = self.path_to_block_id(parent_path)?;
+
+		// Verify the parent is a directory and the name is not already taken.
+		{
+			let parent = self.arena.get(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
+			match &parent.content {
+				BlockContent::DagPb(DagPb::Dir(entries)) =>
+					if entries.contains_key(dir_name) {
+						fail!(InvalidErr::AlreadyExists(dir_name.to_string()));
+					},
+				_ => return Err(Error::invalid_path(parent_path)),
+			}
+		}
+
+		// Compute the CID of the new empty directory and push it to the arena.
+		// The returned ArenaId is stored in the Link so that path resolution can find this
+		// specific block even when other empty directories share the same CID.
+		let new_dir_cid = dir_cid(&BTreeMap::new())?;
+		let new_dir_arena_id = self.arena.push(Block::new(new_dir_cid, DagPb::Dir(BTreeMap::new())));
+
+		// Insert a Link to the new directory in the parent.
+		let parent = self.arena.get_mut(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
+		match &mut parent.content {
+			BlockContent::DagPb(DagPb::Dir(entries)) => {
+				let link = Link::new(new_dir_cid, None, new_dir_arena_id);
+				entries.insert(dir_name.to_string(), link);
+			},
+			_ => unreachable!("already verified above"),
+		}
+
+		Ok(())
 	}
 
 	pub(crate) fn metadata_by_ref(&self, block: &Block<T>) -> VfsResult<VfsMetadata> {

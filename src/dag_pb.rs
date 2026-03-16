@@ -9,7 +9,6 @@ use crate::{
 };
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
-use derive_more::Constructor;
 use libipld::{
 	pb::{PbLink, PbNode},
 	Cid,
@@ -104,7 +103,14 @@ fn load_file<T: Read + Seek>(
 	);
 
 	// Insert this node.
-	let links = pb_node.links.into_iter().map(|pb_link| Link::new(pb_link.cid, pb_link.size)).collect::<Vec<_>>();
+	let links = pb_node
+		.links
+		.into_iter()
+		.map(|pb_link| {
+			let link_id = arena.get_id_by_index(&pb_link.cid);
+			Link::new(pb_link.cid, pb_link.size, link_id)
+		})
+		.collect::<Vec<_>>();
 	let content = DagPb::MultiBlockFile(links.clone(), reader.clone());
 	let block = Block::new(cid, content);
 	tracing::debug!(?block, "DagPb file loaded");
@@ -150,12 +156,26 @@ fn single_block_file<T>(
 	Ok(arena.push(block))
 }
 
+/// Computes the DagPb CID for a directory with the given named links.
+pub(crate) fn dir_cid(named_links: &BTreeMap<String, Link>) -> DagPbResult<Cid> {
+	use crate::config::CidCodec;
+	use libipld::multihash::{Code, MultihashDigest as _};
+	use std::io::Read as _;
+
+	let ReaderWithLen { mut reader, .. } = directory_conent_writer(named_links)?;
+	let mut buf = Vec::new();
+	reader.read_to_end(&mut buf)?;
+	let digest = Code::Sha2_256.digest(&buf);
+	Ok(Cid::new_v1(CidCodec::DagPb as u64, digest))
+}
+
 fn load_directory<T>(arena: &mut Arena<Block<T>>, cid: Cid, pb_links: Vec<PbLink>) -> DagPbResult<ArenaId> {
 	let links = pb_links
 		.into_iter()
 		.map(|pb_link| {
 			let name = pb_link.name.ok_or(UnixFsErr::MissingLinkNameInDirectory)?;
-			let link = Link::new(pb_link.cid, pb_link.size);
+			let link_id = arena.get_id_by_index(&pb_link.cid);
+			let link = Link::new(pb_link.cid, pb_link.size, link_id);
 			Ok::<_, DagPbErr>((name, link))
 		})
 		.collect::<Result<BTreeMap<_, _>, _>>()?;
@@ -276,11 +296,25 @@ fn single_block_file_writer<T: Read + Seek + 'static>(sbf: &SingleBlockFile<T>) 
 // Utility structs
 // ===========================================================
 
-#[derive(Constructor, derive_more::Debug, Clone, Copy)]
+#[derive(derive_more::Debug, Clone, Copy)]
 pub struct Link {
 	#[debug("{}", cid.to_string())]
 	pub cid: Cid,
 	pub cumulative_dag_size: Option<u64>,
+	/// In-memory hint: the `ArenaId` of the block this link points to. Not serialized.
+	/// Set when a link is created in-memory via [`create_dir`] to avoid CID-index
+	/// collisions between distinct blocks that share the same content (and thus CID).
+	pub(crate) arena_id: Option<ArenaId>,
+}
+
+impl Link {
+	pub fn new<S, I>(cid: Cid, cumulative_dag_size: S, arena_id: I) -> Self
+	where
+		S: Into<Option<u64>>,
+		I: Into<Option<ArenaId>>,
+	{
+		Self { cid, cumulative_dag_size: cumulative_dag_size.into(), arena_id: arena_id.into() }
+	}
 }
 
 pub struct ReaderWithLen {
