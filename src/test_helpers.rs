@@ -1,5 +1,3 @@
-use crate::config::Config;
-
 use libipld::multihash::Hasher;
 use std::{
 	env,
@@ -20,12 +18,6 @@ where
 	hasher.finalize().to_vec()
 }
 
-pub fn test_config(file_name: &str) -> Option<Config> {
-	match file_name {
-		"dir-with-files.car" | "symlink.car" | "dir-with-percent-encoded-filename.car" => Some(Config::default()),
-		_ => None,
-	}
-}
 /// It loads a file from `<project>/resources/tests/`
 pub fn test_file<P: AsRef<Path>>(file_name: P) -> BufReader<File> {
 	base_test_file(file_name).expect("Test file exists .qed")

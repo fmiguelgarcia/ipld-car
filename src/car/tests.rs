@@ -1,7 +1,6 @@
 use crate::{
 	car::ContentAddressableArchive,
-	config::Config,
-	test_helpers::{block_ids_test_file, checksum, roots_test_file, test_config, test_file},
+	test_helpers::{block_ids_test_file, checksum, roots_test_file, test_file},
 };
 
 use anyhow::Result;
@@ -20,7 +19,7 @@ fn load_and_check_cids(name: &str) -> Result<()> {
 	let mut reader = test_file(name);
 	let car = ContentAddressableArchive::load(&mut reader)?;
 
-	let roots = car.root_cids(&Config::default())?.iter().map(Cid::to_string).collect::<Vec<_>>();
+	let roots = car.root_cids()?.iter().map(Cid::to_string).collect::<Vec<_>>();
 	assert_eq!(exp_roots, roots);
 
 	let block_ids = car.arena.iter().map(|block| block.cid().unwrap().to_string()).collect::<Vec<_>>();
@@ -36,17 +35,16 @@ fn load_and_check_cids(name: &str) -> Result<()> {
 // #[test_case("dir-with-percent-encoded-filename.car")]
 fn load_and_save(car_path: &str) -> Result<()> {
 	let car = ContentAddressableArchive::load(test_file(car_path))?;
-	let config = test_config(car_path).expect("Missing configuration ");
 
 	let mut saved_car_file = BufWriter::new(tempfile()?);
-	car.write(&mut saved_car_file, &config)?;
+	car.write(&mut saved_car_file)?;
 	saved_car_file.rewind()?;
 
 	// Check root CIDs
-	let loaded_roots = car.root_cids(&config)?;
+	let loaded_roots = car.root_cids()?;
 	let saved_car_file = BufReader::new(saved_car_file.into_inner()?);
 	let writen_car = ContentAddressableArchive::load(saved_car_file)?;
-	let writen_roots = writen_car.root_cids(&config)?;
+	let writen_roots = writen_car.root_cids()?;
 	assert_eq!(loaded_roots, writen_roots);
 
 	let mut writen_car_content = writen_car.content.clone_and_rewind();

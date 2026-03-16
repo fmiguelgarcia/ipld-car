@@ -1,6 +1,7 @@
 use crate::{
 	arena::{Arena, ArenaId},
 	car::Block,
+	config::Config,
 	ensure,
 	error::{DagPbErr, DagPbResult, UnixFsErr},
 	fail,
@@ -156,17 +157,17 @@ fn single_block_file<T>(
 	Ok(arena.push(block))
 }
 
-/// Computes the DagPb CID for a directory with the given named links.
-pub(crate) fn dir_cid(named_links: &BTreeMap<String, Link>) -> DagPbResult<Cid> {
-	use crate::config::CidCodec;
-	use libipld::multihash::{Code, MultihashDigest as _};
+/// Computes the DagPb CID for a directory with the given named links, using the hash
+/// algorithm and codec defined in `config`.
+pub(crate) fn dir_cid(named_links: &BTreeMap<String, Link>, config: &Config) -> DagPbResult<Cid> {
+	use libipld::multihash::MultihashDigest as _;
 	use std::io::Read as _;
 
 	let ReaderWithLen { mut reader, .. } = directory_conent_writer(named_links)?;
 	let mut buf = Vec::new();
 	reader.read_to_end(&mut buf)?;
-	let digest = Code::Sha2_256.digest(&buf);
-	Ok(Cid::new_v1(CidCodec::DagPb as u64, digest))
+	let digest = config.hash_code.digest(&buf);
+	Ok(Cid::new_v1(config.cid_codec as u64, digest))
 }
 
 fn load_directory<T>(arena: &mut Arena<Block<T>>, cid: Cid, pb_links: Vec<PbLink>) -> DagPbResult<ArenaId> {

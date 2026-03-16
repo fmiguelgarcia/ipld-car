@@ -1,5 +1,6 @@
 use crate::{
 	car::{block_content::BlockContent, fs::CarFs, ContentAddressableArchive},
+	config::{Config, ConfigBuilder},
 	dag_pb::DagPb,
 	fail,
 	test_helpers::test_file,
@@ -7,7 +8,7 @@ use crate::{
 };
 
 use anyhow::{anyhow, Result};
-use libipld::Cid;
+use libipld::{multihash::Code, Cid};
 use test_case::test_case;
 use vfs::FileSystem;
 
@@ -119,8 +120,31 @@ fn debug_vfs_create_dir() -> Result<()> {
 	vfs_create_dir(name, dir_path, new_dirs, exp_dir_entries)
 }
 
+#[test_case( Config::default(), "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354"; "Default")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Sha2_256).build().unwrap(), "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354"; "Sha2_256")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Sha2_512).build().unwrap(), "bafybgqe5nnhmihs4pga4k4xhbnfzs24sxuhxjdirpqamhpyx5zhst52pkrnfk7vjdmr7g7lopssextjnqmkc4ygusjcultofxzma3wsiifrxa"; "Sha2_512")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Sha3_224).build().unwrap(), "bafybohaxxsftjqf3b4znpqfahxmrfmbdqdtjs7ocpmrrricrng3a"; "Sha3_224")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Sha3_256).build().unwrap(), "bafybmialzx2tmwtnybodeampc4xrreu3qx72tmt66oc3gdcghdrffyobsi"; "Sha3_256")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Sha3_384).build().unwrap(), "bafybkmekctv2lplwpwyko474ghd3hdrdrcx24o6exea7x7y5ttd3k3derf6nnpylfajnl5nadbreax2fzllq"; "Sha3_384")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Sha3_512).build().unwrap(), "bafybiqex3teqzaa62yijyaplxks6legc2avg5uqelggjmuqpeb5dvbhcgbjrqni2w3ixpo2on3332ev5ubcpgeylgz6svhax2cb2uyjrfi3ii"; "Sha3_512")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Keccak224).build().unwrap(), "bafybuhachdpoyie3b6raejh7flxsudayunva35l7bzjrszweahwa"; "Keccak224")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Keccak256).build().unwrap(), "bafybwih5fpbfsmx433ipwqncxquogw5zcpjzvyitw2qzsnvtfmyqwo7lom"; "Keccak256")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Keccak384).build().unwrap(), "bafybyma26pxps62mxdpsvrc5u5iyjyoknkfoipawbus2fd2af74w5ujjob5cki4aiq2trvbidimesgaf4ehq"; "Keccak384")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Keccak512).build().unwrap(), "bafyb2qdkg7of5v7duv2qybyar3v5iuqyzo2dwtjdbqe4b3pw4ia46zijou4xlcipbjd32dntmp3kugqokmlxxtyrpwr23xtvby76wr3hrb65i"; "Keccak512")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Blake2b256).build().unwrap(), "bafykbzacebugfutjir6qie7apo5shpry32ruwfi762uytd5g3u2gk7tpscndq"; "Blake2b256")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Blake2b512).build().unwrap(), "bafymbzacicomke2wmycm7onwxnovyryjj2dyyegzh3z7gdrpmpjf3r5p5s7262oohdo27lujdbks4cog54atajyrt5e6ipq73tqfi62bsxfw3kad"; "Blake2b512")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Blake2s128).build().unwrap(), "bafynbzaccblku3vfxgszwvsyfufz6kqmkhnq"; "Blake2s128")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Blake2s256).build().unwrap(), "bafyobzacebxzx4f4amxpvjywriut5uzqpsbo4mkdfmpe7kgixhqqlhtmu5rhw"; "Blake2s256")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Blake3_256).build().unwrap(), "bafyb4igcwu4aknzxeunla7d6swhtgjcpcdpi7hk5twl4ubnlczrqh3gmme"; "Blake3_256")]
+fn empty_dag_pb_directory(config: Config, exp_cid: &str) -> Result<()> {
+	let car = ContentAddressableArchive::new(config)?;
+
+	let root_cid = car.root_cids()?.first().map(Cid::to_string).unwrap_or_default();
+	assert_eq!(&root_cid, exp_cid);
+
+	Ok(())
+}
 /*
-fn empty_dag_pb_directory() {}
 fn empty_dag_pb_file() {}
 fn empty_raw_block() {}
 */

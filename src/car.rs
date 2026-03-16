@@ -26,7 +26,11 @@ use crate::{
 };
 
 use libipld::Cid;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::{
+	fs::File,
+	io::{Read, Seek, SeekFrom, Write},
+};
+use tempfile::tempfile;
 use tracing::{debug, trace};
 
 mod block;
@@ -47,18 +51,30 @@ pub struct ContentAddressableArchive<T> {
 	pub content: BoundedReader<T>,
 	roots: Vec<ArenaId>,
 	arena: Arena<Block<T>>,
+	config: Config,
+}
+
+impl ContentAddressableArchive<File> {
+	pub fn new(config: Config) -> Result<Self> {
+		let content = BoundedReader::from_reader(tempfile()?)?;
+		let mut arena = Arena::default();
+		let root_dir_cid = dir_cid(&BTreeMap::new(), &config)?;
+		let root_id = arena.push(Block::new(root_dir_cid, DagPb::Dir(BTreeMap::new())));
+
+		Ok(Self { content, roots: vec![root_id], arena, config })
+	}
 }
 
 // VFS support
 // ===========================================================================
 
+use crate::dag_pb::dir_cid;
 #[cfg(feature = "vfs")]
-use crate::dag_pb::{dir_cid, Link};
+use crate::dag_pb::Link;
 #[cfg(feature = "vfs")]
 use crate::error::NotSupportedErr;
 #[cfg(feature = "vfs")]
 use block_content::BlockContent;
-#[cfg(feature = "vfs")]
 use std::collections::BTreeMap;
 #[cfg(feature = "vfs")]
 use std::path::{Component, Path};
@@ -129,7 +145,7 @@ impl<T> ContentAddressableArchive<T> {
 		// Compute the CID of the new empty directory and push it to the arena.
 		// The returned ArenaId is stored in the Link so that path resolution can find this
 		// specific block even when other empty directories share the same CID.
-		let new_dir_cid = dir_cid(&BTreeMap::new())?;
+		let new_dir_cid = dir_cid(&BTreeMap::new(), &self.config)?;
 		let new_dir_arena_id = self.arena.push(Block::new(new_dir_cid, DagPb::Dir(BTreeMap::new())));
 
 		// Insert a Link to the new directory in the parent.
@@ -211,7 +227,7 @@ impl<F: Read + Seek> ContentAddressableArchive<F> {
 			.collect::<Vec<_>>();
 		ensure!(roots.len() == header.roots.len(), InvalidErr::HeaderLen);
 
-		Ok(Self { content: reader, roots, arena })
+		Ok(Self { content: reader, roots, arena, config: Config::default() })
 	}
 }
 
@@ -219,9 +235,9 @@ impl<F: Read + Seek> ContentAddressableArchive<F> {
 // ===========================================================================
 
 impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
-	pub fn write<W: Write>(&self, writer: &mut W, config: &Config) -> Result<u64> {
+	pub fn write<W: Write>(&self, writer: &mut W) -> Result<u64> {
 		// Write header
-		let header = CarHeader::new_v1(self.root_cids(config)?);
+		let header = CarHeader::new_v1(self.root_cids()?);
 		let header_written = header.write(writer)? as u64;
 		debug!(?header, pos = header_written, "Header written");
 
@@ -229,7 +245,7 @@ impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
 		let mut acc_block_written = 0u64;
 		for block in self.arena.iter() {
 			let block_written = block
-				.write(&self.arena, writer, config)?
+				.write(&self.arena, writer, &self.config)?
 				.checked_add(acc_block_written)
 				.ok_or(Error::FileTooLarge)?;
 			acc_block_written = acc_block_written.checked_add(block_written).ok_or(Error::FileTooLarge)?;
@@ -241,7 +257,7 @@ impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
 }
 
 impl<T: Read + Seek> ContentAddressableArchive<T> {
-	pub fn root_cids(&self, _config: &Config) -> Result<Vec<Cid>> {
+	pub fn root_cids(&self) -> Result<Vec<Cid>> {
 		let roots = self.roots.clone();
 
 		roots

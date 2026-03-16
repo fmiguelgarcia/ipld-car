@@ -1,6 +1,6 @@
-use crate::car::ContentAddressableArchive;
+use crate::{car::ContentAddressableArchive, error::Result};
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 #[cfg(test)]
 mod tests;
@@ -15,6 +15,10 @@ impl<T> CarFs<T> {
 	pub fn into_inner(self) -> Option<ContentAddressableArchive<T>> {
 		let mutexed = Arc::into_inner(self.car)?;
 		mutexed.into_inner().ok()
+	}
+
+	pub fn lock(&self) -> Result<MutexGuard<'_, ContentAddressableArchive<T>>> {
+		self.car.lock().map_err(Into::into)
 	}
 }
 

@@ -41,7 +41,7 @@ pub struct BoundedReader<T> {
 
 impl<T> BoundedReader<T> {
 	/// Creates a new bounded reader wrapping the shared reader, restricted to the given range.
-	/// 
+	///
 	/// # NOTE
 	/// It does NOT check that `range` is valid in `reader`, that will fail during read/seek
 	/// operations.

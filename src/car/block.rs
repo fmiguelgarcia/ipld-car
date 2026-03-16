@@ -3,7 +3,7 @@ use crate::{
 	car::block_content::BlockContent,
 	config::Config,
 	dag_pb::{DagPb, ReaderWithLen},
-	error::{Result, Error},
+	error::{Error, Result},
 	Arena, BoundedReader,
 };
 
