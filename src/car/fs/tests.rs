@@ -1,6 +1,6 @@
 use crate::{
 	car::{block_content::BlockContent, fs::CarFs, ContentAddressableArchive},
-	config::{Config, ConfigBuilder},
+	config::{Config, ConfigBuilder, LeafPolicy},
 	dag_pb::DagPb,
 	fail,
 	test_helpers::test_file,
@@ -9,6 +9,7 @@ use crate::{
 
 use anyhow::{anyhow, Result};
 use libipld::{multihash::Code, Cid};
+use std::path::Path;
 use test_case::test_case;
 use vfs::FileSystem;
 
@@ -74,9 +75,9 @@ where
 	let cid = name.parse::<Cid>()?;
 	let id = DagPb::load(&mut arena, cid, content)?;
 	let BlockContent::DagPb(ref dag_pb) = arena.get(id).unwrap().content else { fail!(anyhow!("It is not a DagPb")) };
-	let DagPb::Dir(entries) = dag_pb else { fail!(anyhow!("It is not a directory")) };
+	let DagPb::Dir(directory) = dag_pb else { fail!(anyhow!("It is not a directory")) };
 
-	let dir_entries = entries.keys().cloned().collect::<Vec<_>>();
+	let dir_entries = directory.entries().keys().cloned().collect::<Vec<_>>();
 	let exp_dir_entries = exp_dir_entries.into_iter().map(String::from).collect::<Vec<_>>();
 	assert_eq!(dir_entries, exp_dir_entries);
 
@@ -144,7 +145,21 @@ fn empty_dag_pb_directory(config: Config, exp_cid: &str) -> Result<()> {
 
 	Ok(())
 }
-/*
-fn empty_dag_pb_file() {}
-fn empty_raw_block() {}
-*/
+
+#[test_case( Config::default(), "" => ignore; "Default" )]
+#[test_case( ConfigBuilder::default().leaf_policy(LeafPolicy::UnixFs).build().unwrap(), "bafybeif7ztnhq65lumvvtr4ekcwd2ifwgm3awq4zfr3srh462rwyinlb4y"; "UnixFs leaf policy" )]
+fn empty_dag_pb_file(config: Config, exp_cid: &str) -> Result<()> {
+	const FILE_NAME: &str = "empty.txt";
+	let car = CarFs::from(ContentAddressableArchive::new(config)?);
+
+	let mut file = car.create_file(FILE_NAME)?;
+	file.flush()?;
+	drop(file);
+
+	let file_cid = car.lock()?.path_to_cid(Path::new(FILE_NAME))?.map(|cid| cid.to_string()).unwrap_or_default();
+	assert_eq!(file_cid, exp_cid);
+
+	Ok(())
+}
+
+// fn empty_raw_block() {}

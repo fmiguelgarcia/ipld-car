@@ -2,8 +2,9 @@ use crate::{BoundedReaderErr, ContentAddressableArchive};
 
 use ciborium::{de::Error as CborDeErr, ser::Error as CborSerErr};
 use std::{
+	convert::Infallible,
 	ffi::OsStr,
-	io,
+	io::{self, IntoInnerError, Read, Seek},
 	path::Path,
 	sync::{MutexGuard, PoisonError},
 };
@@ -93,6 +94,18 @@ impl From<Error> for VfsError {
 	}
 }
 
+impl From<Infallible> for Error {
+	fn from(_: Infallible) -> Self {
+		panic!("Infallible error");
+	}
+}
+
+impl<T> From<IntoInnerError<T>> for Error {
+	fn from(inner_err: IntoInnerError<T>) -> Self {
+		Self::Io(inner_err.into())
+	}
+}
+
 impl From<CborDeErr<io::Error>> for Error {
 	#[inline]
 	fn from(e: CborDeErr<io::Error>) -> Self {
@@ -109,7 +122,7 @@ impl From<CborSerErr<io::Error>> for Error {
 	}
 }
 
-impl<T> From<PoisonError<MutexGuard<'_, ContentAddressableArchive<T>>>> for Error {
+impl<T: Read + Seek> From<PoisonError<MutexGuard<'_, ContentAddressableArchive<T>>>> for Error {
 	#[inline]
 	fn from(_: PoisonError<MutexGuard<'_, ContentAddressableArchive<T>>>) -> Self {
 		Self::Poison(PoisonedErr::CAR)

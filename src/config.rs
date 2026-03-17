@@ -1,12 +1,19 @@
+use crate::error::{CidErr, Error, InvalidErr};
+
+use derivative::Derivative;
 use derive_builder::Builder;
 use derive_more::From;
-use libipld::multihash::{self, Hasher, Sha2_256};
+use libipld::{
+	multihash::{self, Hasher, Sha2_256},
+	Cid,
+};
 use nbytes::bytes;
 use num_enum::TryFromPrimitive;
 use std::{io::Write, num::NonZeroUsize};
 
 /// Configuration of CID generation.
-#[derive(Debug, Clone, Copy, Builder)]
+#[derive(Debug, Clone, Copy, Builder, Derivative)]
+#[derivative(Default)]
 pub struct Config {
 	#[builder(default = "ChunkPolicy::FixedSize(WellKnownChunkSize::F256KiB)")]
 	pub chunk_policy: ChunkPolicy,
@@ -15,6 +22,7 @@ pub struct Config {
 	#[builder(default = "DAGLayout::Flat")]
 	pub layout: DAGLayout,
 	#[builder(default = "multihash::Code::Sha2_256")]
+	#[derivative(Default(value = "multihash::Code::Sha2_256"))]
 	pub hash_code: multihash::Code,
 	#[builder(default = "CidCodec::DagPb")]
 	pub cid_codec: CidCodec,
@@ -34,15 +42,18 @@ impl Config {
 	}
 }
 
-impl Default for Config {
-	fn default() -> Self {
-		Config {
-			chunk_policy: ChunkPolicy::FixedSize(WellKnownChunkSize::F256KiB),
-			leaf_policy: LeafPolicy::Raw,
-			layout: DAGLayout::Flat,
-			hash_code: multihash::Code::Sha2_256,
-			cid_codec: CidCodec::DagPb,
-		}
+impl TryFrom<&Cid> for Config {
+	type Error = Error;
+
+	fn try_from(cid: &Cid) -> Result<Self, Self::Error> {
+		let cid_codec = CidCodec::try_from(cid.codec()).map_err(|_| CidErr::CodecNotSupported(cid.codec()))?;
+		let hash_codec = multihash::Code::try_from(cid.hash().code())?;
+
+		ConfigBuilder::default()
+			.cid_codec(cid_codec)
+			.hash_code(hash_codec)
+			.build()
+			.map_err(|build_err| Error::from(InvalidErr::ConfigBuilder(build_err.to_string())))
 	}
 }
 
@@ -51,8 +62,8 @@ impl Default for Config {
 #[derive(Default, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
 #[repr(u64)]
 pub enum CidCodec {
-	#[default]
 	Raw = 0x55,
+	#[default]
 	DagPb = 0x70,
 	DagCbor = 0x71,
 	DagJson = 0x0129,
@@ -64,14 +75,14 @@ pub enum CidCodec {
 #[repr(u8)]
 pub enum MaxChildren {
 	C11 = 11,
-	#[default]
 	C44 = 44,
+	#[default]
 	C174 = 174,
 }
 
 /// Number of times a layer repeats in trickle DAG layout (future use).
 #[cfg_attr(feature = "std", derive(Debug))]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 #[repr(u8)]
 pub enum LayerRepeats {
 	LR1 = 1,
@@ -83,12 +94,22 @@ pub enum LayerRepeats {
 ///
 /// Only `Flat` layout is currently supported.
 #[cfg_attr(feature = "std", derive(Debug))]
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum DAGLayout {
 	#[default]
 	Flat,
-	// Balanced(MaxChildren),
-	// Trickle(MaxChildren, LayerRepeats),
+	Balanced(MaxChildren),
+	Trickle(MaxChildren, LayerRepeats),
+}
+
+impl DAGLayout {
+	pub fn max_children_per_layer(&self) -> u32 {
+		match self {
+			Self::Flat => u32::MAX,
+			Self::Balanced(max) => *max as u8 as u32,
+			Self::Trickle(max, _) => *max as u8 as u32,
+		}
+	}
 }
 
 /// Defines the configuration of leaf in a DAG.

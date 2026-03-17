@@ -1,7 +1,7 @@
 use std::io::{Read, Seek, Write};
 
 pub mod arena;
-pub use arena::{Arena, ArenaId, ArenaIndexedItem};
+pub use arena::{Arena, ArenaId, ArenaItem};
 pub mod bounded_reader;
 pub use bounded_reader::{BoundedReader, BoundedReaderErr};
 pub mod car;
@@ -21,6 +21,11 @@ impl<T> SeekAndRead for T where T: Seek + Read {}
 /// Trait combining Seek and Write, return value for writing files
 pub trait SeekAndWrite: Seek + Write {}
 impl<T> SeekAndWrite for T where T: Seek + Write {}
+
+pub trait ContextLen {
+	fn data_len(&self) -> u64;
+	fn dag_pb_len(&self) -> u64;
+}
 
 // Helper macros
 // ============================================================================

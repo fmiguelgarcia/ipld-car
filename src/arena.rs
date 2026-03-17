@@ -1,13 +1,18 @@
 use std::{collections::BTreeMap, slice::Iter};
 
+use derivative::Derivative;
+
 pub type ArenaId = usize;
 
 /// Trait for items that can be indexed in an arena. Items provide an optional index key that maps
 /// to their arena ID.
-pub trait ArenaIndexedItem {
+pub trait ArenaItem {
 	type Id: Ord;
 
 	fn index(&self) -> Option<Self::Id>;
+	fn children(&self) -> Vec<Self>
+	where
+		Self: Sized;
 }
 
 /// Arena allocator with optional indexed lookup. Stores items in a vector and maintains an
@@ -16,13 +21,14 @@ pub trait ArenaIndexedItem {
 ///
 /// # TODO:
 // - Delete an element. Use kind of `Option` because index should be increasing and it cannot be reindexed.
-#[derive(Debug)]
-pub struct Arena<T: ArenaIndexedItem> {
+#[derive(Debug, Derivative)]
+#[derivative(Default(bound = ""))]
+pub struct Arena<T: ArenaItem> {
 	items: Vec<T>,
 	index: BTreeMap<T::Id, ArenaId>,
 }
 
-impl<T: ArenaIndexedItem> Arena<T> {
+impl<T: ArenaItem> Arena<T> {
 	/// Creates a new arena with pre-allocated capacity.
 	pub fn with_capacity(capacity: usize) -> Self {
 		Self { items: Vec::with_capacity(capacity), index: BTreeMap::new() }
@@ -36,11 +42,20 @@ impl<T: ArenaIndexedItem> Arena<T> {
 
 	/// Pushes a new item into the arena, returns its ArenaId.
 	pub fn push(&mut self, item: T) -> ArenaId {
+		// Insert `item` and index it.
 		let id = self.items.len();
 		if let Some(idx) = item.index() {
 			self.index.insert(idx, id);
 		}
 		self.items.push(item);
+
+		id
+	}
+
+	pub fn recursive_push(&mut self, item: T) -> ArenaId {
+		let children = item.children();
+		let id = self.push(item);
+		let _child_ids = children.into_iter().map(|child| self.push(child)).collect::<Vec<_>>();
 		id
 	}
 
@@ -77,11 +92,5 @@ impl<T: ArenaIndexedItem> Arena<T> {
 	pub fn get_mut_by_index(&mut self, idx: &T::Id) -> Option<&mut T> {
 		let id = self.get_id_by_index(idx)?;
 		self.get_mut(id)
-	}
-}
-
-impl<T: ArenaIndexedItem> Default for Arena<T> {
-	fn default() -> Self {
-		Self { items: Vec::new(), index: BTreeMap::new() }
 	}
 }

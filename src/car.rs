@@ -18,14 +18,15 @@
 //! Reference: <https://ipld.io/specs/transport/car/carv1/>
 use crate::{
 	arena::{Arena, ArenaId},
+	car::block_builder::BlockBuilder,
 	config::{CidCodec, Config},
-	dag_pb::DagPb,
+	dag_pb::{DagPb, Directory},
 	ensure,
 	error::{CidErr, Error, InvalidErr, NotFoundErr, Result},
-	fail, BoundedReader,
+	fail, BoundedReader, ContextLen,
 };
 
-use libipld::Cid;
+use libipld::{pb::PbNode, Cid};
 use std::{
 	fs::File,
 	io::{Read, Seek, SeekFrom, Write},
@@ -35,6 +36,7 @@ use tracing::{debug, trace};
 
 mod block;
 pub use block::Block;
+mod block_builder;
 mod block_content;
 mod block_def;
 pub(crate) use block_def::BlockDef;
@@ -47,7 +49,7 @@ pub(crate) use header::CarHeader;
 mod tests;
 
 #[derive(derive_more::Debug)]
-pub struct ContentAddressableArchive<T> {
+pub struct ContentAddressableArchive<T: Read + Seek> {
 	pub content: BoundedReader<T>,
 	roots: Vec<ArenaId>,
 	arena: Arena<Block<T>>,
@@ -58,10 +60,29 @@ impl ContentAddressableArchive<File> {
 	pub fn new(config: Config) -> Result<Self> {
 		let content = BoundedReader::from_reader(tempfile()?)?;
 		let mut arena = Arena::default();
-		let root_dir_cid = dir_cid(&BTreeMap::new(), &config)?;
-		let root_id = arena.push(Block::new(root_dir_cid, DagPb::Dir(BTreeMap::new())));
+		let dir = Directory::default();
+		let root_dir_cid = dir_cid(&dir, &config)?;
+		let root_id = arena.push(Block::new(root_dir_cid, DagPb::Dir(dir)));
 
 		Ok(Self { content, roots: vec![root_id], arena, config })
+	}
+}
+
+impl<T: Read + Seek> ContentAddressableArchive<T> {
+	pub fn add_file(&mut self, name: String, parent_id: ArenaId, reader: T) -> Result<()> {
+		// Create Tree of `reader`.
+		let bounded = BoundedReader::from_reader(reader)?;
+		let block_builder = BlockBuilder::new(bounded, self.config)?;
+		let block = block_builder.build()?;
+		let cid = *block.cid().expect("Generated block has CID .qed");
+		let link = Link::new(cid, block.dag_pb_len(), Some(block.data_len()), None);
+
+		// Add block (recursivelly to arena).
+		let id = self.arena.push(block);
+
+		let parent = self.arena.get_mut(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
+		parent.push_directory_entry(name, link.with_arena_id(id))?;
+		Ok(())
 	}
 }
 
@@ -75,7 +96,6 @@ use crate::dag_pb::Link;
 use crate::error::NotSupportedErr;
 #[cfg(feature = "vfs")]
 use block_content::BlockContent;
-use std::collections::BTreeMap;
 #[cfg(feature = "vfs")]
 use std::path::{Component, Path};
 #[cfg(feature = "vfs")]
@@ -85,8 +105,8 @@ use vfs::{
 };
 
 #[cfg(feature = "vfs")]
-impl<T> ContentAddressableArchive<T> {
-	pub(crate) fn path_to_block_ids(&self, path: &Path) -> Result<Vec<ArenaId>> {
+impl<T: Read + Seek> ContentAddressableArchive<T> {
+	pub fn path_to_block_ids(&self, path: &Path) -> Result<Vec<ArenaId>> {
 		let mut levels = vec![self.roots.clone()];
 
 		for path_component in path.components() {
@@ -97,8 +117,8 @@ impl<T> ContentAddressableArchive<T> {
 					let mut new_level = vec![];
 					for block_id in levels.last().ok_or(NotFoundErr::Path)? {
 						let block = self.arena.get(*block_id).expect("Invalid block ID");
-						if let BlockContent::DagPb(DagPb::Dir(dir_entries)) = &block.content {
-							if let Some(link) = dir_entries.get(name).cloned() {
+						if let BlockContent::DagPb(DagPb::Dir(dir)) = &block.content {
+							if let Some(link) = dir.entries().get(name).cloned() {
 								let new_block_id = link
 									.arena_id
 									.or_else(|| self.arena.get_id_by_index(&link.cid))
@@ -120,22 +140,53 @@ impl<T> ContentAddressableArchive<T> {
 		levels.pop().ok_or(Error::NotFound(NotFoundErr::Path))
 	}
 
-	fn path_to_block_id(&self, path: &Path) -> Result<ArenaId> {
+	pub fn path_to_block_id(&self, path: &Path) -> Result<ArenaId> {
 		let found_ids = self.path_to_block_ids(path)?;
 		ensure!(found_ids.len() < 2, Error::more_than_one(found_ids.len(), path));
 		found_ids.first().copied().ok_or_else(|| Error::from(NotFoundErr::Path))
 	}
 
+	pub fn path_to_cid(&self, path: &Path) -> Result<Option<Cid>> {
+		let id = self.path_to_block_id(path)?;
+		let cid = self.arena.get(id).and_then(|block| block.cid()).cloned();
+		Ok(cid)
+	}
+
+	/*
+	fn path_to_mut_block(&mut self, path: &Path) -> Result<&'_ mut Block<T>> {
+		let found_id = self.path_to_block_id(path)?;
+		self.arena.get_mut(found_id).ok_or_else(|| Error::from(NotFoundErr::ArenaId(found_id)))
+	}
+	*/
+
+	pub(crate) fn path_to_block(&self, path: &Path) -> Result<&'_ Block<T>> {
+		let found_id = self.path_to_block_id(path)?;
+		self.arena.get(found_id).ok_or_else(|| Error::from(NotFoundErr::ArenaId(found_id)))
+	}
+
+	/*
+	pub fn create_file(&self, path: &Path) -> Result<BufWriter<File>> {
+		let parent = path.parent().unwrap_or_else(|| Path::new("/"));
+		let file_name = path.file_name().and_then(OsStr::to_str).ok_or( InvalidErr::Path( path.as_os_str().to_string_lossy().to_string()))?;
+		let parent_block = self.path_to_mut_block(parent)?;
+
+		let link = Link::new(cid, cumulative_dag_size, arena_id)
+		parent_block.push_directory_entry(file_name, link)?;
+
+
+		let tmp = BufWriter::new(tempfile()?);
+	}*/
+
 	/// Creates a new empty directory at `parent_path/dir_name`.
-	pub(crate) fn create_dir(&mut self, parent_path: &Path, dir_name: &str) -> Result<()> {
+	pub fn create_dir(&mut self, parent_path: &Path, dir_name: &str) -> Result<()> {
 		let parent_id = self.path_to_block_id(parent_path)?;
 
 		// Verify the parent is a directory and the name is not already taken.
 		{
 			let parent = self.arena.get(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
 			match &parent.content {
-				BlockContent::DagPb(DagPb::Dir(entries)) =>
-					if entries.contains_key(dir_name) {
+				BlockContent::DagPb(DagPb::Dir(dir)) =>
+					if dir.entries().contains_key(dir_name) {
 						fail!(InvalidErr::AlreadyExists(dir_name.to_string()));
 					},
 				_ => return Err(Error::invalid_path(parent_path)),
@@ -145,15 +196,17 @@ impl<T> ContentAddressableArchive<T> {
 		// Compute the CID of the new empty directory and push it to the arena.
 		// The returned ArenaId is stored in the Link so that path resolution can find this
 		// specific block even when other empty directories share the same CID.
-		let new_dir_cid = dir_cid(&BTreeMap::new(), &self.config)?;
-		let new_dir_arena_id = self.arena.push(Block::new(new_dir_cid, DagPb::Dir(BTreeMap::new())));
+		let new_dir = Directory::default();
+		let new_dir_pb_len = PbNode::from(&new_dir).into_bytes().len() as u64;
+		let new_dir_cid = dir_cid(&new_dir, &self.config)?;
+		let new_dir_arena_id = self.arena.push(Block::new(new_dir_cid, DagPb::Dir(Directory::default())));
 
 		// Insert a Link to the new directory in the parent.
 		let parent = self.arena.get_mut(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
 		match &mut parent.content {
-			BlockContent::DagPb(DagPb::Dir(entries)) => {
-				let link = Link::new(new_dir_cid, None, new_dir_arena_id);
-				entries.insert(dir_name.to_string(), link);
+			BlockContent::DagPb(DagPb::Dir(dir)) => {
+				let link = Link::new(new_dir_cid, new_dir_pb_len, None, new_dir_arena_id);
+				dir.mut_entries().insert(dir_name.to_string(), link);
 			},
 			_ => unreachable!("already verified above"),
 		}
@@ -162,12 +215,15 @@ impl<T> ContentAddressableArchive<T> {
 	}
 
 	pub(crate) fn metadata_by_ref(&self, block: &Block<T>) -> VfsResult<VfsMetadata> {
+		use crate::ContextLen;
+
 		let meta = match &block.content {
 			BlockContent::Raw(reader) => metadata_new_file(reader.bound_len()),
 			BlockContent::DagPb(dag_pb) => match dag_pb {
 				DagPb::Dir(..) => metadata_new(VfsFileType::Directory, 0),
-				DagPb::SingleBlockFile(sbf) => metadata_new_file(sbf.len()),
-				DagPb::MultiBlockFile(..) | DagPb::Symlink(..) => fail!(VfsErrorKind::NotSupported),
+				DagPb::SingleBlockFile(sbf) => metadata_new_file(sbf.data_len()),
+				DagPb::MultiBlockFile(mbf) => metadata_new_file(mbf.data_len()),
+				DagPb::Symlink(..) => fail!(VfsErrorKind::NotSupported),
 			},
 		};
 

@@ -1,17 +1,22 @@
 use crate::{
-	arena::ArenaIndexedItem,
+	arena::ArenaItem,
 	car::block_content::BlockContent,
-	config::Config,
-	dag_pb::{DagPb, ReaderWithLen},
-	error::{Error, Result},
-	Arena, BoundedReader,
+	config::{CidCodec, Config},
+	dag_pb::{DagPb, Link, ReaderWithLen},
+	ensure,
+	error::{DagPbResult, Error, Result},
+	fail, Arena, BoundedReader, ContextLen,
 };
 
+use derivative::Derivative;
 use libipld::Cid;
-use std::io::{copy, Read, Seek, Write};
+use std::io::{self, copy, Read, Seek, Write};
 
+#[derive(Derivative)]
+#[derivative(Clone)]
 pub struct Block<T> {
 	cid: Option<Cid>,
+	#[derivative(Clone(bound = ""))]
 	pub(crate) content: BlockContent<T>,
 }
 
@@ -23,20 +28,76 @@ impl<T> Block<T> {
 	{
 		Self { cid: cid.into(), content: content.into() }
 	}
-}
 
-impl<T> Block<T> {
 	pub fn cid(&self) -> Option<&Cid> {
 		self.cid.as_ref()
 	}
+
+	pub fn push_directory_entry(&mut self, name: String, link: Link) -> DagPbResult<()> {
+		if let BlockContent::DagPb(DagPb::Dir(directory)) = &mut self.content {
+			ensure!(!directory.entries().contains_key(&name), io::Error::from(io::ErrorKind::AlreadyExists));
+			directory.mut_entries().insert(name, link);
+			self.cid.take();
+
+			Ok(())
+		} else {
+			fail!(io::Error::from(io::ErrorKind::NotFound))
+		}
+	}
 }
 
-impl<T> ArenaIndexedItem for Block<T> {
+impl<T> ContextLen for Block<T> {
+	fn data_len(&self) -> u64 {
+		self.content.data_len()
+	}
+
+	fn dag_pb_len(&self) -> u64 {
+		self.content.dag_pb_len()
+	}
+}
+
+impl<T: Read + Seek> ArenaItem for Block<T> {
 	type Id = Cid;
 
 	#[inline]
 	fn index(&self) -> Option<Self::Id> {
 		self.cid
+	}
+
+	fn children(&self) -> Vec<Self> {
+		match &self.content {
+			BlockContent::DagPb(DagPb::MultiBlockFile(mbf)) => {
+				let mut local_arena = Arena::default();
+				let mut offset = 0u64;
+
+				mbf.links()
+					.iter()
+					.map(|link| {
+						let sub_reader = mbf
+							.reader()
+							.sub(offset..offset + link.cumulative_dag_size)
+							.expect("Sub reader is valid in `Block::children`");
+						let codec = CidCodec::try_from(link.cid.codec()).expect("Generated block uses valid CID codec");
+						let block = match codec {
+							CidCodec::Raw => Block::new(link.cid, BlockContent::Raw(sub_reader)),
+							CidCodec::DagPb => {
+								let child_id = DagPb::load(&mut local_arena, link.cid, sub_reader)
+									.expect("Block previously loaded .qed");
+								let block_ref = local_arena.get(child_id).expect("Node inserted previously .qed");
+								debug_assert_eq!(block_ref.cid(), Some(&link.cid));
+
+								(*block_ref).clone()
+							},
+							_ => unimplemented!("Unimplemented CID codec on `Block::children`"),
+						};
+						offset += link.cumulative_dag_size;
+
+						block
+					})
+					.collect()
+			},
+			_ => vec![],
+		}
 	}
 }
 

@@ -29,6 +29,8 @@ pub enum InvalidErr {
 	FileRef,
 	#[error("Directory `{0}` already exists")]
 	AlreadyExists(String),
+	#[error("Config builder failed: {0}")]
+	ConfigBuilder(String),
 }
 
 #[cfg(feature = "vfs")]
@@ -41,6 +43,7 @@ impl From<InvalidErr> for VfsError {
 			e @ InvalidErr::BlockLen => vfs_err(VfsErrorKind::NotSupported, e),
 			e @ InvalidErr::Link => vfs_err(VfsErrorKind::NotSupported, e),
 			e @ InvalidErr::FileRef => vfs_err(VfsErrorKind::NotSupported, e),
+			e @ InvalidErr::ConfigBuilder(..) => vfs_err(VfsErrorKind::NotSupported, e),
 			InvalidErr::AlreadyExists(..) => VfsErrorKind::DirectoryExists.into(),
 			InvalidErr::CborDec(cbor) => VfsErrorKind::Other(cbor.to_string()).into(),
 			InvalidErr::CborEnc(cbor) => VfsErrorKind::Other(cbor).into(),

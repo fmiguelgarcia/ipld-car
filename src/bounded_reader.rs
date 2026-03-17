@@ -1,5 +1,6 @@
 use crate::ensure;
 
+use derivative::Derivative;
 use std::{
 	cmp::min,
 	io::{self, Read, Seek, SeekFrom},
@@ -29,9 +30,11 @@ pub enum BoundedReaderErr {
 /// Clone is cheap and it tries to avoid the use of the inner shared reader, for instance
 /// `BoundedReader::clone_and_rewind` does NOT move the inner reader because it only set member
 /// `curr` to zero.
-#[derive(derive_more::Debug)]
+#[derive(derive_more::Debug, Derivative)]
+#[derivative(Clone)]
 pub struct BoundedReader<T> {
 	#[debug(skip)]
+	#[derivative(Clone(bound = ""))]
 	reader: Arc<Mutex<T>>,
 	start: u64,
 	end: u64,
@@ -50,6 +53,10 @@ impl<T> BoundedReader<T> {
 		Ok(Self { reader, start: range.start, end: range.end, curr: 0 })
 	}
 
+	pub unsafe fn new_unchecked(reader: Arc<Mutex<T>>, range: Range<u64>) -> Self {
+		Self { reader, start: range.start, end: range.end, curr: 0 }
+	}
+
 	/// Returns the absolute range this bounded reader is restricted to.
 	pub fn bounds(&self) -> Range<u64> {
 		self.start..self.end
@@ -63,6 +70,10 @@ impl<T> BoundedReader<T> {
 	/// Creates a new bounded reader that is a sub-range of this one.
 	pub fn sub<R: BoundedIndex<T>>(&self, range: R) -> Result<Self, BoundedReaderErr> {
 		range.get(self)
+	}
+
+	pub fn clamped_sub<R: BoundedIndex<T>>(&self, range: R) -> Self {
+		range.clamped_get(self)
 	}
 
 	/// Clones this bounded reader and resets the read position to the start of the range.
@@ -132,13 +143,6 @@ impl<T: Seek> BoundedReader<T> {
 	}
 }
 
-/// Clone is cheap - only shares the Arc and copies position state.
-impl<T> Clone for BoundedReader<T> {
-	fn clone(&self) -> Self {
-		Self { reader: Arc::clone(&self.reader), start: self.start, end: self.end, curr: self.curr }
-	}
-}
-
 impl<T: Read + Seek> Read for BoundedReader<T> {
 	/// Read bytes within the bounded range from the storage file.
 	fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -174,6 +178,7 @@ impl<T: Seek> Seek for BoundedReader<T> {
 /// Trait for types that can be used as sub-ranges of a bounded reader.
 pub trait BoundedIndex<T> {
 	fn get(self, bounded: &BoundedReader<T>) -> Result<BoundedReader<T>, BoundedReaderErr>;
+	fn clamped_get(self, bounded: &BoundedReader<T>) -> BoundedReader<T>;
 }
 
 impl<T> BoundedIndex<T> for Range<u64> {
@@ -186,6 +191,17 @@ impl<T> BoundedIndex<T> for Range<u64> {
 		let reader = Arc::clone(&bounded.reader);
 		BoundedReader::new(reader, start..end)
 	}
+
+	fn clamped_get(self, bounded: &BoundedReader<T>) -> BoundedReader<T> {
+		let start = bounded.start.saturating_add(self.start);
+		let clamped_start = min(start, bounded.end);
+		let end = bounded.start.saturating_add(self.end);
+		let clamped_end = min(end, bounded.end);
+		let clamped_start = min(clamped_start, clamped_end);
+
+		let reader = Arc::clone(&bounded.reader);
+		unsafe { BoundedReader::new_unchecked(reader, clamped_start..clamped_end) }
+	}
 }
 
 impl<T> BoundedIndex<T> for RangeFrom<u64> {
@@ -195,6 +211,14 @@ impl<T> BoundedIndex<T> for RangeFrom<u64> {
 		let reader = Arc::clone(&bounded.reader);
 		BoundedReader::new(reader, start..bounded.end)
 	}
+
+	fn clamped_get(self, bounded: &BoundedReader<T>) -> BoundedReader<T> {
+		let start = bounded.start.saturating_add(self.start);
+		let clamped_start = min(start, bounded.end);
+
+		let reader = Arc::clone(&bounded.reader);
+		unsafe { BoundedReader::new_unchecked(reader, clamped_start..bounded.end) }
+	}
 }
 
 impl<T> BoundedIndex<T> for RangeInclusive<u64> {
@@ -202,6 +226,12 @@ impl<T> BoundedIndex<T> for RangeInclusive<u64> {
 		let (start, inc_end) = self.into_inner();
 		let range = start..(inc_end.checked_add(1).ok_or(BoundedReaderErr::FileTooLarge)?);
 		range.get(bounded)
+	}
+
+	fn clamped_get(self, bounded: &BoundedReader<T>) -> BoundedReader<T> {
+		let (start, inc_end) = self.into_inner();
+		let range = start..(inc_end.saturating_add(1));
+		range.clamped_get(bounded)
 	}
 }
 
@@ -211,11 +241,22 @@ impl<T> BoundedIndex<T> for RangeToInclusive<u64> {
 		let range = bounded.start..end;
 		range.get(bounded)
 	}
+
+	fn clamped_get(self, bounded: &BoundedReader<T>) -> BoundedReader<T> {
+		let end = self.end.saturating_add(1);
+		let clamped_end = min(end, bounded.end);
+		let range = bounded.start..clamped_end;
+		range.clamped_get(bounded)
+	}
 }
 
 impl<T> BoundedIndex<T> for RangeFull {
 	fn get(self, bounded: &BoundedReader<T>) -> Result<BoundedReader<T>, BoundedReaderErr> {
 		Ok(BoundedReader { reader: Arc::clone(&bounded.reader), start: bounded.start, end: bounded.end, curr: 0 })
+	}
+
+	fn clamped_get(self, bounded: &BoundedReader<T>) -> BoundedReader<T> {
+		BoundedReader { reader: Arc::clone(&bounded.reader), start: bounded.start, end: bounded.end, curr: 0 }
 	}
 }
 

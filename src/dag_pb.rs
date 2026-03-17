@@ -1,16 +1,18 @@
 use crate::{
 	arena::{Arena, ArenaId},
 	car::Block,
-	config::Config,
+	config::{CidCodec, Config},
 	ensure,
-	error::{DagPbErr, DagPbResult, UnixFsErr},
+	error::{DagPbErr, DagPbResult, NotSupportedErr, UnixFsErr},
 	fail,
-	proto::{self, data::DataType, new_pb_node},
-	BoundedReader,
+	proto::{self, data::DataType},
+	BoundedReader, ContextLen,
 };
 
 use bytes::{Buf, BufMut, Bytes, BytesMut};
+use derive_more::From;
 use libipld::{
+	multihash::MultihashDigest,
 	pb::{PbLink, PbNode},
 	Cid,
 };
@@ -23,18 +25,56 @@ use std::{
 	io::{copy, Read, Seek},
 };
 
+mod directory;
+pub(crate) use directory::Directory;
+mod multi_block_file;
+pub(crate) use multi_block_file::MultiBlockFile;
 mod single_block_file;
-use single_block_file::SingleBlockFile;
+pub(crate) use single_block_file::{SBFContent, SingleBlockFile};
+mod symlink;
+use symlink::Symlink;
+mod link;
+pub use link::Link;
 
 const BUF_LIMIT: usize = bytes!(2; MiB);
 const BUF_CAPS: &[usize] = &[bytes!(4; KiB), bytes!(16; KiB), bytes!(128; KiB), bytes!(512; KiB), bytes!(1; MiB)];
 
-#[derive(derive_more::Debug)]
+#[derive(derive_more::Debug, From)]
 pub enum DagPb<T> {
-	Dir(BTreeMap<String, Link>),
+	Dir(Directory),
 	SingleBlockFile(SingleBlockFile<T>),
-	MultiBlockFile(Vec<Link>, BoundedReader<T>),
+	MultiBlockFile(MultiBlockFile<T>),
 	Symlink(Symlink),
+}
+
+impl<T> Clone for DagPb<T> {
+	fn clone(&self) -> Self {
+		match self {
+			Self::SingleBlockFile(sbf) => Self::SingleBlockFile(sbf.clone()),
+			Self::MultiBlockFile(mbf) => Self::MultiBlockFile(mbf.clone()),
+			Self::Dir(dir) => Self::Dir(dir.clone()),
+			Self::Symlink(sym) => Self::Symlink(sym.clone()),
+		}
+	}
+}
+
+impl<T> ContextLen for DagPb<T> {
+	fn data_len(&self) -> u64 {
+		match self {
+			Self::SingleBlockFile(sbf) => sbf.data_len(),
+			Self::MultiBlockFile(mbf) => mbf.data_len(),
+			Self::Dir(..) | Self::Symlink(..) => 0,
+		}
+	}
+
+	fn dag_pb_len(&self) -> u64 {
+		match self {
+			Self::SingleBlockFile(sbf) => sbf.dag_pb_len(),
+			Self::MultiBlockFile(mbf) => mbf.dag_pb_len(),
+			Self::Dir(dir) => dir.dag_pb_len(),
+			Self::Symlink(symlink) => symlink.dag_pb_len(),
+		}
+	}
 }
 
 // Load part
@@ -45,6 +85,7 @@ impl<T: Read + Seek> DagPb<T> {
 		// Try to decode `PbNode` and rebounds to data.
 		let decode_pb_node_max = reader.bound_len();
 		let pb_node = decode_pb_node(&mut reader, decode_pb_node_max)?;
+		tracing::debug!(?pb_node, "Load pb node");
 		let pb_node_len = pb_node.get_size() as u64;
 		debug_assert_eq!(pb_node_len, pb_node.clone().into_bytes().len() as u64);
 
@@ -53,6 +94,7 @@ impl<T: Read + Seek> DagPb<T> {
 		// Decode Unixfs Data
 		let enc_data = pb_node.data.clone().ok_or(UnixFsErr::MissingData)?;
 		let unixfs = proto::Data::decode(enc_data).map_err(|_| UnixFsErr::InvalidData)?;
+		tracing::debug!(?unixfs, "Load proto Data");
 		let unixfs_type =
 			DataType::try_from(unixfs.r#type).map_err(|_| UnixFsErr::DataTypeNotSupported(unixfs.r#type))?;
 		let id = match unixfs_type {
@@ -77,12 +119,7 @@ fn load_symlink<T: Read + Seek>(
 
 	let posix_path = unixfs.data.ok_or(UnixFsErr::MissingSymlinkInfo)?;
 	let posix_path_utf8 = String::try_from(posix_path).map_err(|_| UnixFsErr::SymlinkPathUtf8)?;
-	/*
-	let posix_path_str = posix_path_utf8.strip_prefix("/ipfs/").unwrap_or(posix_path_utf8.as_str());
-	let target_cid_str = target_cid_str.split('/').next().unwrap_or(posix_path_utf8.as_str());
-	let target_cid = target_cid_str.parse::<Cid>().map_err(CidErr::from)?;
-	*/
-	let block = Block::new(cid, DagPb::Symlink(Symlink::POSIXPath(posix_path_utf8)));
+	let block = Block::new(cid, DagPb::Symlink(Symlink::new(posix_path_utf8)));
 	tracing::debug!(?block, "DagPb symlink loaded");
 
 	Ok(arena.push(block))
@@ -96,7 +133,7 @@ fn load_file<T: Read + Seek>(
 	reader: BoundedReader<T>,
 ) -> DagPbResult<ArenaId> {
 	if pb_node.links.is_empty() {
-		return single_block_file(arena, cid, pb_node.data, reader);
+		return single_block_file(arena, cid, unixfs.data.map(Bytes::from), reader);
 	}
 	ensure!(
 		unixfs.blocksizes.len() == pb_node.links.len(),
@@ -104,16 +141,9 @@ fn load_file<T: Read + Seek>(
 	);
 
 	// Insert this node.
-	let links = pb_node
-		.links
-		.into_iter()
-		.map(|pb_link| {
-			let link_id = arena.get_id_by_index(&pb_link.cid);
-			Link::new(pb_link.cid, pb_link.size, link_id)
-		})
-		.collect::<Vec<_>>();
-	let content = DagPb::MultiBlockFile(links.clone(), reader.clone());
-	let block = Block::new(cid, content);
+	let links = pb_node.links.into_iter().map(|pb_link| Link::from(pb_link).with_arena(arena)).collect::<Vec<_>>();
+	let mbf = MultiBlockFile::new(links.clone(), reader.clone());
+	let block = Block::new(cid, DagPb::from(mbf));
 	tracing::debug!(?block, "DagPb file loaded");
 	let id = arena.push(block);
 
@@ -139,49 +169,52 @@ fn load_file<T: Read + Seek>(
 	Ok(id)
 }
 
-fn single_block_file<T>(
+fn single_block_file<T: Read + Seek>(
 	arena: &mut Arena<Block<T>>,
 	cid: Cid,
 	data: Option<Bytes>,
 	reader: BoundedReader<T>,
 ) -> DagPbResult<ArenaId> {
-	let sbf = match data {
+	let sbf_content = match data {
 		Some(data) => {
 			ensure!(reader.bound_len() == 0, UnixFsErr::FileWithDataAndReader);
-			SingleBlockFile::Data(data)
+			SBFContent::from(data)
 		},
-		None => SingleBlockFile::Reader(reader),
+		None => SBFContent::from(reader),
 	};
-	let block = Block::new(cid, DagPb::SingleBlockFile(sbf));
+	let block = Block::new(cid, DagPb::SingleBlockFile(sbf_content.into()));
 	tracing::debug!(?block, "DagPb single block loaded");
 	Ok(arena.push(block))
 }
 
 /// Computes the DagPb CID for a directory with the given named links, using the hash
 /// algorithm and codec defined in `config`.
-pub(crate) fn dir_cid(named_links: &BTreeMap<String, Link>, config: &Config) -> DagPbResult<Cid> {
+pub(crate) fn dir_cid(dir: &Directory, config: &Config) -> DagPbResult<Cid> {
 	use libipld::multihash::MultihashDigest as _;
 	use std::io::Read as _;
 
-	let ReaderWithLen { mut reader, .. } = directory_conent_writer(named_links)?;
+	let ReaderWithLen { mut reader, .. } = directory_conent_writer(dir)?;
 	let mut buf = Vec::new();
 	reader.read_to_end(&mut buf)?;
 	let digest = config.hash_code.digest(&buf);
 	Ok(Cid::new_v1(config.cid_codec as u64, digest))
 }
 
-fn load_directory<T>(arena: &mut Arena<Block<T>>, cid: Cid, pb_links: Vec<PbLink>) -> DagPbResult<ArenaId> {
-	let links = pb_links
+fn load_directory<T: Read + Seek>(
+	arena: &mut Arena<Block<T>>,
+	cid: Cid,
+	pb_links: Vec<PbLink>,
+) -> DagPbResult<ArenaId> {
+	let dir_entries = pb_links
 		.into_iter()
-		.map(|pb_link| {
-			let name = pb_link.name.ok_or(UnixFsErr::MissingLinkNameInDirectory)?;
-			let link_id = arena.get_id_by_index(&pb_link.cid);
-			let link = Link::new(pb_link.cid, pb_link.size, link_id);
+		.map(|mut pb_link| {
+			let name = pb_link.name.take().ok_or(UnixFsErr::MissingLinkNameInDirectory)?;
+			let link = Link::from(pb_link).with_arena(arena);
 			Ok::<_, DagPbErr>((name, link))
 		})
 		.collect::<Result<BTreeMap<_, _>, _>>()?;
 
-	let block = Block::new(cid, DagPb::Dir(links));
+	let block = Block::new(cid, DagPb::Dir(Directory::from(dir_entries)));
 	tracing::debug!(?block, "DagPb directory load");
 	let id = arena.push(block);
 	Ok(id)
@@ -232,7 +265,7 @@ fn buf_caps(block_len: u64) -> Vec<usize> {
 impl<T: Read + Seek + 'static> DagPb<T> {
 	pub fn content_writer(&self, _arena: &Arena<Block<T>>) -> DagPbResult<ReaderWithLen> {
 		match self {
-			Self::Dir(named_links) => directory_conent_writer(named_links),
+			Self::Dir(directory) => directory_conent_writer(directory),
 			Self::SingleBlockFile(sbf) => single_block_file_writer(sbf),
 			Self::Symlink(symlink) => Ok(symlink_writer(symlink)),
 			Self::MultiBlockFile(..) => unimplemented!("DagPb::content_writer"),
@@ -241,82 +274,41 @@ impl<T: Read + Seek + 'static> DagPb<T> {
 }
 
 fn symlink_writer(s: &Symlink) -> ReaderWithLen {
-	let unixfs = match s {
-		Symlink::POSIXPath(path) => proto::Data::new_symlink(path.as_str()),
-	};
+	let pb_node = PbNode::from(s);
+	tracing::debug!(?pb_node, "Write symlink");
+	let enc_pb_node = Bytes::from(pb_node.into_bytes());
+	let enc_pb_node_len = enc_pb_node.len() as u64;
 
-	let data = Bytes::from(unixfs.encode_to_vec());
-	let pb_node = Bytes::from(new_pb_node(vec![], data).into_bytes());
-	let pb_node_len = pb_node.len() as u64;
-
-	ReaderWithLen::new(pb_node.reader(), pb_node_len)
+	ReaderWithLen::new(enc_pb_node.reader(), enc_pb_node_len)
 }
 
-fn directory_conent_writer(named_links: &BTreeMap<String, Link>) -> DagPbResult<ReaderWithLen> {
-	// Create PbNode
-	let links = named_links
-		.iter()
-		.map(|(name, link)| PbLink { cid: link.cid, name: Some(name.clone()), size: link.cumulative_dag_size })
-		.collect();
-	let data = Bytes::from(proto::Data::new_directory().encode_to_vec());
-	let pb_node = Bytes::from(new_pb_node(links, data).into_bytes());
-	let pb_node_len = pb_node.len() as u64;
+fn directory_conent_writer(dir: &Directory) -> DagPbResult<ReaderWithLen> {
+	let pb_node = PbNode::from(dir);
+	tracing::debug!(?pb_node, "Write directory");
+	let enc_pb_node = Bytes::from(pb_node.into_bytes());
+	let enc_pb_node_len = enc_pb_node.len() as u64;
 
-	Ok(ReaderWithLen::new(pb_node.reader(), pb_node_len))
+	Ok(ReaderWithLen::new(enc_pb_node.reader(), enc_pb_node_len))
 }
 
 fn single_block_file_writer<T: Read + Seek + 'static>(sbf: &SingleBlockFile<T>) -> DagPbResult<ReaderWithLen> {
-	let (pb_node, reader) = match sbf {
-		SingleBlockFile::Data(data) => {
-			let pb_node = new_pb_node(vec![], data.clone());
-			(pb_node, None)
+	let pb_node = PbNode::from(sbf);
+	tracing::debug!(?pb_node, "Write SBF");
+	let enc_pb_node = Bytes::from(pb_node.into_bytes());
+	let enc_pb_node_len = enc_pb_node.len() as u64;
+
+	match sbf.content() {
+		SBFContent::Data(..) => Ok(ReaderWithLen::new(enc_pb_node.reader(), enc_pb_node_len)),
+		SBFContent::Reader(reader) => {
+			let chained_reader = enc_pb_node.reader().chain(reader.clone_and_rewind());
+			let len = enc_pb_node_len.checked_add(reader.bound_len()).ok_or(DagPbErr::FileTooLarge)?;
+			Ok(ReaderWithLen::new(chained_reader, len))
 		},
-		SingleBlockFile::Reader(reader) => {
-			let pb_node = new_pb_node(vec![], None);
-			(pb_node, Some(reader.clone_and_rewind()))
-		},
-	};
-
-	// Calculate total len.
-	let pb_node_enc = Bytes::from(pb_node.into_bytes());
-	let pb_node_enc_len = pb_node_enc.len() as u64;
-
-	// Chain encoded pb_node and reader.
-	let reader_with_len = if let Some(reader) = reader {
-		let len = pb_node_enc_len.checked_add(reader.bound_len()).ok_or(DagPbErr::FileTooLarge)?;
-		let chained = pb_node_enc.reader().chain(reader);
-
-		ReaderWithLen::new(chained, len)
-	} else {
-		ReaderWithLen::new(pb_node_enc.reader(), pb_node_enc_len)
-	};
-
-	Ok(reader_with_len)
+	}
 }
 
 // Utility structs
 // ===========================================================
-
-#[derive(derive_more::Debug, Clone, Copy)]
-pub struct Link {
-	#[debug("{}", cid.to_string())]
-	pub cid: Cid,
-	pub cumulative_dag_size: Option<u64>,
-	/// In-memory hint: the `ArenaId` of the block this link points to. Not serialized.
-	/// Set when a link is created in-memory via [`create_dir`] to avoid CID-index
-	/// collisions between distinct blocks that share the same content (and thus CID).
-	pub(crate) arena_id: Option<ArenaId>,
-}
-
-impl Link {
-	pub fn new<S, I>(cid: Cid, cumulative_dag_size: S, arena_id: I) -> Self
-	where
-		S: Into<Option<u64>>,
-		I: Into<Option<ArenaId>>,
-	{
-		Self { cid, cumulative_dag_size: cumulative_dag_size.into(), arena_id: arena_id.into() }
-	}
-}
 
 pub struct ReaderWithLen {
 	pub reader: Box<dyn Read>,
@@ -329,7 +321,22 @@ impl ReaderWithLen {
 	}
 }
 
-#[derive(Debug)]
-pub enum Symlink {
-	POSIXPath(String),
+pub trait BuildCid {
+	fn build_cid(&self, config: &Config) -> crate::error::Result<Cid>;
+}
+
+impl<T> BuildCid for T
+where
+	PbNode: for<'a> From<&'a T>,
+{
+	fn build_cid(&self, config: &Config) -> crate::error::Result<Cid> {
+		let mut hasher = config.hasher().ok_or(NotSupportedErr::Hasher(config.hash_code))?;
+		let pb_node = PbNode::from(self).into_bytes();
+		hasher.update(&*pb_node);
+		drop(pb_node);
+
+		let digest = config.hash_code.wrap(hasher.finalize())?;
+		let cid = Cid::new_v1(CidCodec::DagPb as u64, digest);
+		Ok(cid)
+	}
 }

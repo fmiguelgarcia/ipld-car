@@ -16,6 +16,8 @@ derive_more = { version = "2", default-features = false, features = [
 	"deref",
 	"debug",
 ] }
+derivative = "2.2.0"
+derive-new = "0.7.0"
 num_enum = "0.7"
 nbytes = "0.1"
 
