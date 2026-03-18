@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
-use ipfs_unixfs::{car::fs::CarFs, config::Config, ContentAddressableArchive};
+use ipld_car::{car::fs::CarFs, config::Config, ContentAddressableArchive};
 use std::{fs::File, io::BufWriter, path::PathBuf};
 use vfs::FileSystem;
 
@@ -80,9 +80,7 @@ fn cmd_write(output: PathBuf, entries: Vec<String>) -> Result<()> {
 	let fs: CarFs<File> = car.into();
 
 	for entry in &entries {
-		let (dest, src) = entry
-			.split_once('=')
-			.ok_or_else(|| anyhow!("Invalid entry `{entry}`, expected DEST=SRC"))?;
+		let (dest, src) = entry.split_once('=').ok_or_else(|| anyhow!("Invalid entry `{entry}`, expected DEST=SRC"))?;
 
 		// Create parent directories if needed
 		let dest_path = std::path::Path::new(dest);

@@ -1,6 +1,7 @@
+use criterion::{criterion_group, criterion_main, Criterion};
+/*
 use ipfs_unixfs::FileSystemWriter;
 
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use humansize::{format_size, BINARY};
 use quick_protobuf::message::MessageWrite as _;
 use rand::prelude::*;
@@ -35,8 +36,10 @@ fn gen_file(size: Information) -> BufReader<File> {
 
 	BufReader::new(file)
 }
+*/
 
-fn bench_fs_writer(c: &mut Criterion) {
+fn bench_fs_writer(_c: &mut Criterion) {
+	/*
 	let mut group = c.benchmark_group("fs_writer");
 	for bench_conf in [
 		(Information::new::<KiB>(2), BatchSize::PerIteration),
@@ -69,6 +72,7 @@ fn bench_fs_writer(c: &mut Criterion) {
 		});
 	}
 	group.finish();
+	*/
 }
 
 criterion_group!(benches, bench_fs_writer);

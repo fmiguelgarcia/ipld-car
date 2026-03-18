@@ -1,16 +1,54 @@
 [workspace]
-members = ["cli"]
+members = ["ipld-car", "carcli"]
 resolver = "2"
 
-[package]
-name = "ipfs-unixfs"
-version = "0.1.0"
+[workspace.package]
 edition = "2021"
+authors = [""]
+homepage = ""
+repository = ""
+license = "MIT"
 
-[dependencies]
-either = "1"
-tempfile = "3.2.0"
-bytes = { version = "1.8.0", default-features = false, features = ["serde"] }
+[workspace.lints.rust]
+suspicious_double_ref_op = { level = "allow", priority = 2 }
+
+[workspace.lints.clippy]
+all = { level = "allow", priority = 0 }
+correctness = { level = "warn", priority = 1 }
+complexity = { level = "warn", priority = 1 }
+if-same-then-else = { level = "allow", priority = 2 }
+zero-prefixed-literal = { level = "allow", priority = 2 }            # 00_1000_000
+type_complexity = { level = "allow", priority = 2 }                  # raison d'etre
+nonminimal-bool = { level = "allow", priority = 2 }                  # maybe
+borrowed-box = { level = "allow", priority = 2 }                     # Reasonable to fix this one
+too-many-arguments = { level = "allow", priority = 2 }               # (Turning this on would lead to)
+needless-lifetimes = { level = "allow", priority = 2 }               # generated code
+unnecessary_cast = { level = "allow", priority = 2 }                 # Types may change
+identity-op = { level = "allow", priority = 2 }                      # One case where we do 0 +
+useless_conversion = { level = "allow", priority = 2 }               # Types may change
+unit_arg = { level = "allow", priority = 2 }                         # stylistic
+option-map-unit-fn = { level = "allow", priority = 2 }               # stylistic
+bind_instead_of_map = { level = "allow", priority = 2 }              # stylistic
+erasing_op = { level = "allow", priority = 2 }                       # E.g. 0 * DOLLARS
+eq_op = { level = "allow", priority = 2 }                            # In tests we test equality.
+while_immutable_condition = { level = "allow", priority = 2 }        # false positives
+needless_option_as_deref = { level = "allow", priority = 2 }         # false positives
+derivable_impls = { level = "allow", priority = 2 }                  # false positives
+stable_sort_primitive = { level = "allow", priority = 2 }            # prefer stable sort
+extra-unused-type-parameters = { level = "allow", priority = 2 }     # stylistic
+default_constructed_unit_structs = { level = "allow", priority = 2 } # stylistic
+
+
+[workspace.dependencies]
+ipld-car = { path = "ipld-car" }
+
+# libipld: CID
+libipld = { version = "0.16.0", default-features = false, features = [
+	"dag-pb",
+	"dag-json",
+] }
+
+# Derive helpers & tools
 derive_builder = { version = "0.20.2", default-features = false }
 derive_more = { version = "2", default-features = false, features = [
 	"from",
@@ -23,52 +61,50 @@ derive_more = { version = "2", default-features = false, features = [
 derivative = "2.2.0"
 derive-new = "0.7.0"
 num_enum = "0.7"
+
+# Extra containers
+either = "1"
+bytes = { version = "1.8.0", default-features = false }
+
+# Units 
 nbytes = "0.1"
+humansize = "2.1.3"
 
 # Serde 
 serde = "1"
 serde_bytes = "0.11"
 
-# VFS
-vfs = { version = "0.12.2", default-features = false, optional = true }
+# VFS & Filesystem
+vfs = { version = "0.12.2", default-features = false }
+tempfile = "3.2.0"
 
 # CAR v1 — CBOR header serialisation (only with std)
-ciborium = { version = "0.2", optional = true }
+ciborium = "0.2"
 leb128 = "0.2.5"
 
-# Error & logs
+# CLI tools
+clap = { version = "4", features = ["derive"] }
+
+# Error, logs and benchs
 thiserror = { version = "2.0.11", default-features = false }
 tracing = { version = "0.1.40", default-features = false }
-
-# Proto
-libipld = { version = "0.16.0", default-features = false, features = [
-	"dag-pb",
-	"dag-json",
-] }
-prost = { version = "0.13.3", default-features = false, features = ["derive"] }
-quick-protobuf = { version = "0.8.1", default-features = false }
-
-[build-dependencies]
-prost-build = "0.13.3"
-
-[dev-dependencies]
+anyhow = "1"
 criterion = "0.5.1"
-rand = "0.8"
 test-case = "3.3.1"
 test-log = { version = "0.2.16", features = ["trace"] }
-humansize = "2.1.3"
+
+# ProtoBuf 
+prost = { version = "0.13.3", default-features = false, features = ["derive"] }
+quick-protobuf = { version = "0.8.1", default-features = false }
+prost-build = "0.13.3"
+
+# General
+rand = "0.8"
 uom = { version = "0.37.0", features = ["usize", "si"] }
-anyhow = "1"
-multibase = "0.9"
-hex = "*"
+# multibase = "0.9"
+# hex = "*"
 
 
 # [[bench]]
 # name = "fs_reader"
 # harness = false
-
-[features]
-default = [ "std" ]
-jumbo-chunks = []
-vfs = [ "dep:vfs" ]
-std = [ "bytes/std", "dep:ciborium", "derive_builder/std", "prost/std", "vfs" ]
