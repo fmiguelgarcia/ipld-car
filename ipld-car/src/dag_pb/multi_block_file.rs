@@ -26,6 +26,10 @@ impl<T> MultiBlockFile<T> {
 	pub fn reader(&self) -> &BoundedReader<T> {
 		&self.reader
 	}
+
+	pub fn blocksizes(&self) -> impl Iterator<Item = u64> + use<'_, T> {
+		self.links.iter().map(|l| l.blocksize.unwrap_or_default())
+	}
 }
 
 impl<T> Clone for MultiBlockFile<T> {
@@ -40,8 +44,8 @@ impl<T> Clone for MultiBlockFile<T> {
 
 impl<T> From<&MultiBlockFile<T>> for PbNode {
 	fn from(mbf: &MultiBlockFile<T>) -> Self {
-		let (blocksizes, links): (Vec<u64>, Vec<PbLink>) =
-			mbf.links.iter().map(|link| (link.blocksize.unwrap_or_default(), PbLink::from(link))).unzip();
+		let links: Vec<PbLink> = mbf.links.iter().map(PbLink::from).collect();
+		let blocksizes = mbf.blocksizes().collect::<Vec<u64>>();
 		let data = Bytes::from(proto::Data::new_file(blocksizes).encode_to_vec());
 		proto::new_pb_node(links, data)
 	}
@@ -49,7 +53,7 @@ impl<T> From<&MultiBlockFile<T>> for PbNode {
 
 impl<T> ContextLen for MultiBlockFile<T> {
 	fn data_len(&self) -> u64 {
-		self.reader.bound_len()
+		self.blocksizes().sum()
 	}
 
 	fn dag_pb_len(&self) -> u64 {

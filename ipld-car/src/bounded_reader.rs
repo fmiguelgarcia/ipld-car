@@ -53,6 +53,9 @@ impl<T> BoundedReader<T> {
 		Ok(Self { reader, start: range.start, end: range.end, curr: 0 })
 	}
 
+	/// # Safety
+	///
+	/// This function should NOT be called with an invalid range (`range.start > range.end`)
 	pub unsafe fn new_unchecked(reader: Arc<Mutex<T>>, range: Range<u64>) -> Self {
 		Self { reader, start: range.start, end: range.end, curr: 0 }
 	}

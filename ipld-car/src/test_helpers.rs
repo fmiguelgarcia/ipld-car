@@ -46,6 +46,6 @@ fn test_file_with_ext<P: AsRef<Path>, S: AsRef<OsStr>>(file_name: P, extension: 
 
 fn base_test_file<P: AsRef<Path>>(file_name: P) -> IoResult<BufReader<File>> {
 	let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("Env variable CARGO_MANIFEST_DIR is missing");
-	let path = Path::new(&manifest_dir).join("resources").join("tests").join(file_name);
+	let path = Path::new(&manifest_dir).join("..").join("resources").join("tests").join(file_name);
 	Ok(BufReader::new(File::open(path)?))
 }

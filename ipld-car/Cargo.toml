@@ -52,8 +52,14 @@ tracing.workspace = true
 prost = { workspace = true, features = ["derive"] }
 quick-protobuf.workspace = true
 
+[dev-dependencies]
+test-case.workspace = true
+test-log.workspace = true
+anyhow.workspace = true
+criterion.workspace = true
+
 [features]
-default = ["std"]
+default = [ "std" ]
 jumbo-chunks = []
-vfs = ["dep:vfs"]
-std = ["bytes/std", "dep:ciborium", "derive_builder/std", "prost/std", "vfs"]
+vfs = [ "dep:vfs" ]
+std = [ "bytes/std", "dep:ciborium", "derive_builder/std", "prost/std", "vfs" ]

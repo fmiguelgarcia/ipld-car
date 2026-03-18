@@ -106,8 +106,6 @@ prost-build = "0.13.3"
 # General
 rand = "0.8"
 uom = { version = "0.37.0", features = ["usize", "si"] }
-# multibase = "0.9"
-# hex = "*"
 
 
 # [[bench]]

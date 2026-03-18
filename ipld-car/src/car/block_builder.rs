@@ -166,7 +166,7 @@ impl<T: Read + Seek> BlockBuilder<T> {
 
 			// Calculate CID
 			let pb_node = PbNode::from(&sbf).into_bytes();
-			self.hasher.update(&*pb_node);
+			self.hasher.update(&pb_node);
 			drop(pb_node);
 			let digest = self.config.hash_code.wrap(self.hasher.finalize())?;
 			self.hasher.reset();

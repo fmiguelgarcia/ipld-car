@@ -341,7 +341,7 @@ where
 	fn build_cid(&self, config: &Config) -> crate::error::Result<Cid> {
 		let mut hasher = config.hasher().ok_or(NotSupportedErr::Hasher(config.hash_code))?;
 		let pb_node = PbNode::from(self).into_bytes();
-		hasher.update(&*pb_node);
+		hasher.update(&pb_node);
 		drop(pb_node);
 
 		let digest = config.hash_code.wrap(hasher.finalize())?;
