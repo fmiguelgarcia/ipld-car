@@ -18,3 +18,4 @@ ipld-car = { workspace = true, features = ["std", "vfs"] }
 clap.workspace = true
 anyhow.workspace = true
 vfs.workspace = true
+unit-prefix.workspace = true

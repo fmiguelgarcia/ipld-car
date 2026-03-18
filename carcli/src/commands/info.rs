@@ -1,4 +1,4 @@
-use crate::commands::common::fmt_size;
+use crate::commands::common::{fmt_size, SizeFormat};
 use ipld_car::{ContentAddressableArchive, ContextLen};
 
 use anyhow::Result;
@@ -30,8 +30,8 @@ impl SubCmdInfo {
 		println!("Blocks:          {}", block_count);
 		println!("  Roots:         {}", roots.len());
 		println!("  Non-roots:     {}", non_roots);
-		println!("Total DAG-PB:    {}", fmt_size(total_dag_pb_size));
-		println!("Total Data:      {}", fmt_size(total_data_size));
+		println!("Total DAG-PB:    {}", fmt_size(total_dag_pb_size, SizeFormat::Decimal));
+		println!("Total Data:      {}", fmt_size(total_data_size, SizeFormat::Decimal));
 
 		for (i, cid) in roots.iter().enumerate() {
 			println!("  [{i}] {cid}");

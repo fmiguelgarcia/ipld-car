@@ -1,4 +1,12 @@
+use unit_prefix::NumberPrefix;
 use vfs::VfsFileType;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SizeFormat {
+	Binary,
+	Decimal,
+	Bytes,
+}
 
 pub fn pick_icon(name: &str, file_type: VfsFileType) -> char {
 	if file_type == VfsFileType::Directory {
@@ -16,28 +24,20 @@ pub fn pick_icon(name: &str, file_type: VfsFileType) -> char {
 	}
 }
 
-pub fn fmt_size(bytes: u64) -> String {
+pub fn fmt_size(bytes: u64, format: SizeFormat) -> String {
 	if bytes == 0 {
 		return "-".to_string();
 	}
-	if bytes < 1_000 {
-		return format!("{bytes}B");
+	match format {
+		SizeFormat::Bytes => format!("{bytes}B"),
+		SizeFormat::Binary => format_prefix(NumberPrefix::binary(bytes as f64)),
+		SizeFormat::Decimal => format_prefix(NumberPrefix::decimal(bytes as f64)),
 	}
-	if bytes < 1_000_000 {
-		return fmt_decimal(bytes, 1_000, 'k');
-	}
-	if bytes < 1_000_000_000 {
-		return fmt_decimal(bytes, 1_000_000, 'M');
-	}
-	fmt_decimal(bytes, 1_000_000_000, 'G')
 }
 
-fn fmt_decimal(bytes: u64, divisor: u64, suffix: char) -> String {
-	let whole = bytes / divisor;
-	let frac = (bytes % divisor) * 10 / divisor;
-	if frac == 0 {
-		format!("{whole}{suffix}")
-	} else {
-		format!("{whole}.{frac}{suffix}")
+fn format_prefix(n: NumberPrefix<f64>) -> String {
+	match n {
+		NumberPrefix::Standalone(n) => format!("{n:.0}B"),
+		NumberPrefix::Prefixed(prefix, n) => format!("{n:.1}{prefix}B"),
 	}
 }
