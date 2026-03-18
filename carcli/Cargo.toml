@@ -1,7 +1,7 @@
 [package]
 name = "carcli"
-license.workspace = true
 version = "0.1.0"
+license.workspace = true
 authors.workspace = true
 edition.workspace = true
 homepage.workspace = true
