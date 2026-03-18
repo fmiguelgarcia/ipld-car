@@ -84,6 +84,24 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 		parent.push_directory_entry(name, link.with_arena_id(id))?;
 		Ok(())
 	}
+
+	pub fn root_cids(&self) -> Result<Vec<Cid>> {
+		let roots = self.roots.clone();
+
+		roots
+			.into_iter()
+			.map(|id| {
+				let block = self.arena.get(id).ok_or(NotFoundErr::ArenaId(id))?;
+				let cid = *block.cid().expect("Block SHOULD have CID until we add files");
+				Ok(cid)
+			})
+			.collect()
+	}
+
+	#[inline]
+	pub fn arena(&self) -> &Arena<Block<T>> {
+		&self.arena
+	}
 }
 
 // VFS support
@@ -309,20 +327,5 @@ impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
 		}
 
 		header_written.checked_add(acc_block_written).ok_or(Error::FileTooLarge)
-	}
-}
-
-impl<T: Read + Seek> ContentAddressableArchive<T> {
-	pub fn root_cids(&self) -> Result<Vec<Cid>> {
-		let roots = self.roots.clone();
-
-		roots
-			.into_iter()
-			.map(|id| {
-				let block = self.arena.get(id).ok_or(NotFoundErr::ArenaId(id))?;
-				let cid = *block.cid().expect("Block SHOULD have CID until we add files");
-				Ok(cid)
-			})
-			.collect()
 	}
 }

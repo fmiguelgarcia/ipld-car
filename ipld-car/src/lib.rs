@@ -5,8 +5,11 @@ pub use arena::{Arena, ArenaId, ArenaItem};
 pub mod bounded_reader;
 pub use bounded_reader::{BoundedReader, BoundedReaderErr};
 pub mod car;
+#[cfg(feature = "vfs")]
+pub use car::fs::CarFs;
 pub use car::ContentAddressableArchive;
 pub mod config;
+pub use config::Config;
 pub mod dag_pb;
 pub mod error;
 pub(crate) mod proto;
