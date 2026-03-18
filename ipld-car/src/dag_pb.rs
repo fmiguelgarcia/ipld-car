@@ -140,8 +140,17 @@ fn load_file<T: Read + Seek>(
 		UnixFsErr::BlocksizesLenDiffLinksLen(unixfs.blocksizes.len(), pb_node.links.len())
 	);
 
-	// Insert this node.
-	let links = pb_node.links.into_iter().map(|pb_link| Link::from(pb_link).with_arena(arena)).collect::<Vec<_>>();
+	// Insert this node. Zip with unixfs.blocksizes to populate each Link's blocksize field,
+	// which is needed for data_len() to return the correct total file size.
+	let links = pb_node
+		.links
+		.into_iter()
+		.zip(unixfs.blocksizes)
+		.map(|(pb_link, blocksize)| {
+			let cumulative_dag_size = pb_link.size.unwrap_or_default();
+			Link::new(pb_link.cid, cumulative_dag_size, Some(blocksize), None).with_arena(arena)
+		})
+		.collect::<Vec<_>>();
 	let mbf = MultiBlockFile::new(links.clone(), reader.clone());
 	let block = Block::new(cid, DagPb::from(mbf));
 	tracing::debug!(?block, "DagPb file loaded");
