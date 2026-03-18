@@ -1,0 +1,14 @@
+[package]
+name = "ufs"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ufs"
+path = "src/main.rs"
+
+[dependencies]
+ipfs-unixfs = { path = ".." }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+vfs = { version = "0.12.2" }
