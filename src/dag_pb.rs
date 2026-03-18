@@ -268,9 +268,18 @@ impl<T: Read + Seek + 'static> DagPb<T> {
 			Self::Dir(directory) => directory_conent_writer(directory),
 			Self::SingleBlockFile(sbf) => single_block_file_writer(sbf),
 			Self::Symlink(symlink) => Ok(symlink_writer(symlink)),
-			Self::MultiBlockFile(..) => unimplemented!("DagPb::content_writer"),
+			Self::MultiBlockFile(mbf) => Ok(multi_block_file_writer(mbf)),
 		}
 	}
+}
+
+fn multi_block_file_writer<T>(mbf: &MultiBlockFile<T>) -> ReaderWithLen {
+	let pb_node = PbNode::from(mbf);
+	tracing::debug!(?pb_node, "Write MBF");
+	let enc_pb_node = Bytes::from(pb_node.into_bytes());
+	let enc_pb_node_len = enc_pb_node.len() as u64;
+
+	ReaderWithLen::new(enc_pb_node.reader(), enc_pb_node_len)
 }
 
 fn symlink_writer(s: &Symlink) -> ReaderWithLen {

@@ -1,13 +1,14 @@
 use crate::{
 	car::{block_content::BlockContent, Block},
 	config::{ChunkPolicy, CidCodec, Config, DAGLayout, HasherAndWrite, LeafPolicy},
-	dag_pb::{BuildCid, DagPb, Link, MultiBlockFile, SBFContent},
+	dag_pb::{BuildCid, DagPb, Link, MultiBlockFile, SBFContent, SingleBlockFile},
 	ensure,
 	error::{Error, NotSupportedErr, Result},
 	BoundedReader, ContextLen,
 };
 
-use libipld::{multihash::MultihashDigest, Cid};
+use bytes::Bytes;
+use libipld::{multihash::MultihashDigest, pb::PbNode, Cid};
 use std::io::{copy, Read, Seek};
 
 pub struct BlockBuilder<T> {
@@ -148,18 +149,30 @@ impl<T: Read + Seek> BlockBuilder<T> {
 
 		loop {
 			let next_offset = offset.checked_add(chunk_size).ok_or(Error::FileTooLarge)?;
-			let mut chunk = self.reader.clamped_sub(offset..next_offset);
-			offset = match copy(&mut chunk, &mut self.hasher)? {
-				0 if !leaves.is_empty() => break,
-				_ => next_offset,
-			};
+			let chunk = self.reader.clamped_sub(offset..next_offset);
+			if chunk.bound_len() == 0 && !leaves.is_empty() {
+				break;
+			}
+			offset = next_offset;
 
+			let sbf_content = if chunk.bound_len() < chunk_size {
+				let mut buf = Vec::with_capacity(chunk.bound_len() as usize);
+				chunk.clone_and_rewind().read_to_end(&mut buf)?;
+				SBFContent::from(Bytes::from(buf))
+			} else {
+				SBFContent::from(chunk)
+			};
+			let sbf = SingleBlockFile::from(sbf_content);
+
+			// Calculate CID
+			let pb_node = PbNode::from(&sbf).into_bytes();
+			self.hasher.update(&*pb_node);
+			drop(pb_node);
 			let digest = self.config.hash_code.wrap(self.hasher.finalize())?;
-			let cid = Cid::new_v1(CidCodec::DagPb as u64, digest);
 			self.hasher.reset();
 
-			let sbf = DagPb::SingleBlockFile(SBFContent::from(chunk).into());
-			let leaf = Block::new(cid, BlockContent::DagPb(sbf));
+			let cid = Cid::new_v1(CidCodec::DagPb as u64, digest);
+			let leaf = Block::new(cid, BlockContent::DagPb(sbf.into()));
 			leaves.push(leaf);
 		}
 

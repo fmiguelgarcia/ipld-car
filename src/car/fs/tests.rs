@@ -123,6 +123,7 @@ fn debug_vfs_create_dir() -> Result<()> {
 
 #[test_case( Config::default(), "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354"; "Default")]
 #[test_case( ConfigBuilder::default().hash_code(Code::Sha2_256).build().unwrap(), "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354"; "Sha2_256")]
+#[test_case( ConfigBuilder::default().hash_code(Code::Sha2_256).build().unwrap(), "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354"; "4.3.1 Empty dag-pb directory")]
 #[test_case( ConfigBuilder::default().hash_code(Code::Sha2_512).build().unwrap(), "bafybgqe5nnhmihs4pga4k4xhbnfzs24sxuhxjdirpqamhpyx5zhst52pkrnfk7vjdmr7g7lopssextjnqmkc4ygusjcultofxzma3wsiifrxa"; "Sha2_512")]
 #[test_case( ConfigBuilder::default().hash_code(Code::Sha3_224).build().unwrap(), "bafybohaxxsftjqf3b4znpqfahxmrfmbdqdtjs7ocpmrrricrng3a"; "Sha3_224")]
 #[test_case( ConfigBuilder::default().hash_code(Code::Sha3_256).build().unwrap(), "bafybmialzx2tmwtnybodeampc4xrreu3qx72tmt66oc3gdcghdrffyobsi"; "Sha3_256")]
@@ -146,8 +147,9 @@ fn empty_dag_pb_directory(config: Config, exp_cid: &str) -> Result<()> {
 	Ok(())
 }
 
-#[test_case( Config::default(), "" => ignore; "Default" )]
-#[test_case( ConfigBuilder::default().leaf_policy(LeafPolicy::UnixFs).build().unwrap(), "bafybeif7ztnhq65lumvvtr4ekcwd2ifwgm3awq4zfr3srh462rwyinlb4y"; "UnixFs leaf policy" )]
+#[test_case( Config::default(), "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku" ; "4.3.1 Empty RAW block" )]
+#[test_case( ConfigBuilder::default().leaf_policy(LeafPolicy::UnixFs).build().unwrap(), "bafybeif7ztnhq65lumvvtr4ekcwd2ifwgm3awq4zfr3srh462rwyinlb4y"; "4.3.1 Empty dag-pb file" )]
+#[test_log::test]
 fn empty_dag_pb_file(config: Config, exp_cid: &str) -> Result<()> {
 	const FILE_NAME: &str = "empty.txt";
 	let car = CarFs::from(ContentAddressableArchive::new(config)?);

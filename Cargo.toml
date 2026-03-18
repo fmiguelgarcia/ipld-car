@@ -64,7 +64,7 @@ hex = "*"
 # harness = false
 
 [features]
-default = ["std"]
+default = [ "std" ]
 jumbo-chunks = []
-vfs = ["dep:vfs"]
-std = ["bytes/std", "dep:ciborium", "derive_builder/std", "prost/std", "vfs"]
+vfs = [ "dep:vfs" ]
+std = [ "bytes/std", "dep:ciborium", "derive_builder/std", "prost/std", "vfs" ]

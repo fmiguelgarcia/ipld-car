@@ -29,10 +29,9 @@ fn load_and_check_cids(name: &str) -> Result<()> {
 }
 
 /// Check that load and save using ContentAddressableArchive are the same.
-// #[test_case("dir-with-files.car")]
 #[test_case("symlink.car")]
-#[test_log::test]
-// #[test_case("dir-with-percent-encoded-filename.car")]
+#[test_case("dir-with-files.car")]
+#[test_case("dir-with-percent-encoded-filename.car" => ignore["WIP"] )]
 fn load_and_save(car_path: &str) -> Result<()> {
 	let car = ContentAddressableArchive::load(test_file(car_path))?;
 
