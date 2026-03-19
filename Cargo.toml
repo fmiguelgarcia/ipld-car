@@ -83,6 +83,7 @@ serde_bytes = "0.11"
 vfs = { version = "0.12.2", default-features = false }
 tempfile = "3.2.0"
 users = "0.11"
+time = { version = "0.3", features = ["formatting"] }
 
 # CAR v1 — CBOR header serialisation (only with std)
 ciborium = "0.2"
@@ -93,18 +94,20 @@ clap = { version = "4", features = ["derive"] }
 
 # Error, logs and benchs
 thiserror = { version = "2.0.11", default-features = false }
-tracing = { version = "0.1.40", default-features = false }
+tracing = "0.1.40"
 anyhow = "1"
 criterion = "0.5.1"
 test-case = "3.3.1"
 test-log = { version = "0.2.16", features = ["trace"] }
+pretty_env_logger = "0.5"
+handlebars = "6.4"
 
 # ProtoBuf 
 prost = { version = "0.13.3", default-features = false, features = ["derive"] }
 quick-protobuf = { version = "0.8.1", default-features = false }
 prost-build = "0.13.3"
 
-# General
+# Generalu
 rand = "0.8"
 uom = { version = "0.37.0", features = ["usize", "si"] }
 

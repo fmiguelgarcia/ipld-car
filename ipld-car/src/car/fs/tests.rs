@@ -147,10 +147,9 @@ fn empty_dag_pb_directory(config: Config, exp_cid: &str) -> Result<()> {
 	Ok(())
 }
 
-// #[test_case( Config::default(), "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku" ; "4.3.1 Empty RAW
-// block" )]
+#[test_case( Config::default(), "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku" ; "4.3.1 Empty RAW block" )]
 #[test_case( ConfigBuilder::default().leaf_policy(LeafPolicy::UnixFs).build().unwrap(), "bafybeif7ztnhq65lumvvtr4ekcwd2ifwgm3awq4zfr3srh462rwyinlb4y"; "4.3.1 Empty dag-pb file" )]
-fn empty_dag_pb_file(config: Config, exp_cid: &str) -> Result<()> {
+fn empty_file(config: Config, exp_cid: &str) -> Result<()> {
 	const FILE_NAME: &str = "empty.txt";
 	let car = CarFs::from(ContentAddressableArchive::new(config)?);
 
@@ -163,5 +162,3 @@ fn empty_dag_pb_file(config: Config, exp_cid: &str) -> Result<()> {
 
 	Ok(())
 }
-
-// fn empty_raw_block() {}

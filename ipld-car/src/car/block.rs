@@ -9,26 +9,21 @@ use crate::{
 };
 
 use derivative::Derivative;
+use derive_new::new;
 use libipld::Cid;
 use std::io::{self, copy, Read, Seek, Write};
 
-#[derive(Derivative)]
+#[derive(Derivative, new)]
 #[derivative(Clone)]
 pub struct Block<T> {
+	#[new(into)]
 	cid: Option<Cid>,
 	#[derivative(Clone(bound = ""))]
+	#[new(into)]
 	pub(crate) content: BlockContent<T>,
 }
 
 impl<T> Block<T> {
-	pub fn new<C, CT>(cid: C, content: CT) -> Self
-	where
-		C: Into<Option<Cid>>,
-		CT: Into<BlockContent<T>>,
-	{
-		Self { cid: cid.into(), content: content.into() }
-	}
-
 	pub fn cid(&self) -> Option<&Cid> {
 		self.cid.as_ref()
 	}

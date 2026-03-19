@@ -71,7 +71,7 @@ impl<T: Read + Seek> BlockBuilder<T> {
 			.iter()
 			.map(|leaf| {
 				let cid = *leaf.cid().expect("CID was created .qed");
-				Link::new(cid, leaf.dag_pb_len(), leaf.data_len(), None)
+				Link::new(cid, leaf.dag_pb_len(), leaf.data_len(), None, None)
 			})
 			.collect::<Vec<_>>();
 
@@ -80,7 +80,7 @@ impl<T: Read + Seek> BlockBuilder<T> {
 			let next_offset = links.iter().map(|l| l.cumulative_dag_size).sum();
 			let block = self.recursive_trickle_tree_from_leaves(max_children, next_offset, next_chunks)?;
 			let cid = *block.cid().expect("Block CID is generated .qed");
-			let link = Link::new(cid, block.dag_pb_len(), block.data_len(), None);
+			let link = Link::new(cid, block.dag_pb_len(), block.data_len(), None, None);
 			links.push(link)
 		}
 

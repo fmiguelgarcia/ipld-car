@@ -1,20 +1,16 @@
 use crate::{proto, ContextLen};
 
 use bytes::Bytes;
+use derive_new::new;
 use libipld::pb::PbNode;
 use prost::Message;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
-#[derive(Debug)]
+#[derive(Debug, new)]
 pub struct Symlink {
+	#[new(value = "AtomicU64::new(0)")]
 	dag_len_cache: AtomicU64,
 	posix_path: String,
-}
-
-impl Symlink {
-	pub fn new(posix_path: String) -> Self {
-		Self { dag_len_cache: AtomicU64::new(0), posix_path }
-	}
 }
 
 impl Clone for Symlink {

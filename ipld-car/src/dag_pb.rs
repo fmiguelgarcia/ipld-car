@@ -148,7 +148,7 @@ fn load_file<T: Read + Seek>(
 		.zip(unixfs.blocksizes)
 		.map(|(pb_link, blocksize)| {
 			let cumulative_dag_size = pb_link.size.unwrap_or_default();
-			Link::new(pb_link.cid, cumulative_dag_size, Some(blocksize), None).with_arena(arena)
+			Link::new(pb_link.cid, cumulative_dag_size, Some(blocksize), pb_link.name, None).with_arena(arena)
 		})
 		.collect::<Vec<_>>();
 	let mbf = MultiBlockFile::new(links.clone(), reader.clone());

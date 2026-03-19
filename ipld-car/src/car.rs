@@ -75,7 +75,7 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 		let block_builder = BlockBuilder::new(bounded, self.config)?;
 		let block = block_builder.build()?;
 		let cid = *block.cid().expect("Generated block has CID .qed");
-		let link = Link::new(cid, block.dag_pb_len(), Some(block.data_len()), None);
+		let link = Link::new(cid, block.dag_pb_len(), Some(block.data_len()), name.clone(), None);
 
 		// Add block (recursivelly to arena).
 		let id = self.arena.push(block);
@@ -223,7 +223,7 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 		let parent = self.arena.get_mut(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
 		match &mut parent.content {
 			BlockContent::DagPb(DagPb::Dir(dir)) => {
-				let link = Link::new(new_dir_cid, new_dir_pb_len, None, new_dir_arena_id);
+				let link = Link::new(new_dir_cid, new_dir_pb_len, None, dir_name.to_string(), new_dir_arena_id);
 				dir.mut_entries().insert(dir_name.to_string(), link);
 			},
 			_ => unreachable!("already verified above"),

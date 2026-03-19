@@ -1,22 +1,20 @@
 use crate::{dag_pb::Link, proto, BoundedReader, ContextLen};
 
 use bytes::Bytes;
+use derive_new::new;
 use libipld::pb::{PbLink, PbNode};
 use prost::Message;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
-#[derive(derive_more::Debug)]
+#[derive(derive_more::Debug, new)]
 pub struct MultiBlockFile<T> {
+	#[new(value = "AtomicU64::new(0)")]
 	dag_len_cache: AtomicU64,
 	links: Vec<Link>,
 	reader: BoundedReader<T>,
 }
 
 impl<T> MultiBlockFile<T> {
-	pub fn new(links: Vec<Link>, reader: BoundedReader<T>) -> Self {
-		Self { links, reader, dag_len_cache: AtomicU64::new(0) }
-	}
-
 	#[inline]
 	pub fn links(&self) -> &[Link] {
 		&self.links
