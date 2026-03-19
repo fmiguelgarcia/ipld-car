@@ -28,12 +28,21 @@ pub fn test_file<P: AsRef<Path>>(name: P) -> BufReader<File> {
 
 /// It loads the associated roots file (extension `.roots`) of the given test file.
 pub fn roots_test_file<P: AsRef<Path>>(name: P) -> Vec<String> {
-	base_test_file(name, &["exp", "roots"]).lines().collect::<Result<Vec<_>, _>>().expect(INVALID_LINE)
+	let mut root_name = name.as_ref().to_path_buf();
+	root_name.set_extension("roots");
+
+	base_test_file(root_name, &["..", "exp", "roots"])
+		.lines()
+		.collect::<Result<Vec<_>, _>>()
+		.expect(INVALID_LINE)
 }
 
 /// It loads the associated block IDs file (extension `.blockIds`) of the given test file.
 pub fn block_ids_test_file<P: AsRef<Path>>(name: P) -> Vec<String> {
-	base_test_file(name, &["exp", "block_ids"])
+	let mut block_id_name = name.as_ref().to_path_buf();
+	block_id_name.set_extension("blockIds");
+
+	base_test_file(block_id_name, &["..", "exp", "block_ids"])
 		.lines()
 		.collect::<Result<Vec<_>, _>>()
 		.expect(INVALID_LINE)
@@ -49,6 +58,8 @@ pub fn base_test_file<P: AsRef<Path>>(name: P, relative_paths: &[&str]) -> BufRe
 	for sub in relative_paths {
 		path = path.join(sub);
 	}
-	let file = File::open(path.join(name)).expect(FILE_OPEN_FAIL);
+	let path = path.join(name);
+
+	let file = File::open(path).expect(FILE_OPEN_FAIL);
 	BufReader::new(file)
 }

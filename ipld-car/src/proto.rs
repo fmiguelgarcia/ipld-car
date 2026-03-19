@@ -42,8 +42,8 @@ impl Data {
 
 	pub fn new_file_with_data(data: &Bytes) -> Self {
 		let filesize = data.len() as u64;
-		let data: Vec<u8> = data.clone().into();
-		Self::new(data::DataType::File, Some(filesize), vec![], Some(data))
+		let data = if data.is_empty() { None } else { Some(data.clone().into()) };
+		Self::new(data::DataType::File, Some(filesize), vec![], data)
 	}
 
 	fn new(r#type: data::DataType, filesize: Option<u64>, blocksizes: Vec<u64>, data: Option<Vec<u8>>) -> Self {
