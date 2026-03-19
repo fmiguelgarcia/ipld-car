@@ -27,6 +27,7 @@ pub enum Commands {
 }
 
 impl Commands {
+	/// Dispatches to the selected subcommand.
 	pub fn run(&self) -> Result<()> {
 		match self {
 			Commands::Info(cmd) => cmd.run(),

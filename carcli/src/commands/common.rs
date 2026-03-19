@@ -1,13 +1,18 @@
 use unit_prefix::NumberPrefix;
 use vfs::VfsFileType;
 
+/// Controls how file sizes are displayed in `ls` output.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SizeFormat {
+	/// Binary prefixes (KiB, MiB, GiB); powers of 1 024.
 	Binary,
+	/// Decimal prefixes (kB, MB, GB); powers of 1 000.
 	Decimal,
+	/// Raw byte count with no prefix.
 	Bytes,
 }
 
+/// Returns a Nerd Font icon character for `name` based on its extension and `file_type`.
 pub fn pick_icon(name: &str, file_type: VfsFileType) -> char {
 	if file_type == VfsFileType::Directory {
 		return '\u{f115}';
@@ -24,6 +29,7 @@ pub fn pick_icon(name: &str, file_type: VfsFileType) -> char {
 	}
 }
 
+/// Formats `bytes` according to `format`; returns `"-"` for zero.
 pub fn fmt_size(bytes: u64, format: SizeFormat) -> String {
 	if bytes == 0 {
 		return "-".to_string();
@@ -35,6 +41,7 @@ pub fn fmt_size(bytes: u64, format: SizeFormat) -> String {
 	}
 }
 
+/// Converts a `NumberPrefix` value into a human-readable size string.
 fn format_prefix(n: NumberPrefix<f64>) -> String {
 	match n {
 		NumberPrefix::Standalone(n) => format!("{n:.0}B"),

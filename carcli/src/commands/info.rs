@@ -17,6 +17,7 @@ pub struct SubCmdInfo {
 }
 
 impl SubCmdInfo {
+	/// Prints a summary: block counts, total sizes, and root CIDs.
 	pub fn run(&self) -> Result<()> {
 		let file = File::open(&self.file)?;
 		let car = ContentAddressableArchive::load(file)?;
@@ -41,14 +42,17 @@ impl SubCmdInfo {
 	}
 }
 
+/// Returns the total number of blocks in `car`.
 pub fn block_count<T: Read + Seek>(car: &ContentAddressableArchive<T>) -> usize {
 	car.arena().iter().count()
 }
 
+/// Returns the sum of all DAG-PB serialized block sizes in `car`.
 pub fn total_dag_pb_size<T: Read + Seek>(car: &ContentAddressableArchive<T>) -> u64 {
 	car.arena().iter().map(|block| block.dag_pb_len()).sum()
 }
 
+/// Returns the sum of raw data payload sizes across all blocks in `car`.
 pub fn total_data_size<T: Read + Seek>(car: &ContentAddressableArchive<T>) -> u64 {
 	car.arena().iter().map(|block| block.data_len()).sum()
 }

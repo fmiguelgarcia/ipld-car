@@ -82,6 +82,7 @@ serde_bytes = "0.11"
 # VFS & Filesystem
 vfs = { version = "0.12.2", default-features = false }
 tempfile = "3.2.0"
+users = "0.11"
 
 # CAR v1 — CBOR header serialisation (only with std)
 ciborium = "0.2"

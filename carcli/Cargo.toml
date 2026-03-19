@@ -21,3 +21,4 @@ vfs.workspace = true
 unit-prefix.workspace = true
 uutils_term_grid.workspace = true
 terminal_size.workspace = true
+users.workspace = true

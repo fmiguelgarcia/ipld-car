@@ -5,6 +5,7 @@ use clap::Args;
 use std::{fs::File, io::BufWriter, path::PathBuf};
 use vfs::FileSystem;
 
+/// Arguments for the `write` subcommand.
 #[derive(Args)]
 pub struct SubCmdWrite {
 	/// Output CAR file path

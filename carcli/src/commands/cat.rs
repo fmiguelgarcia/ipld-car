@@ -15,6 +15,7 @@ pub struct SubCmdCat {
 }
 
 impl SubCmdCat {
+	/// Reads the file at `self.path`, and streams it to stdout.
 	pub fn run(&self) -> Result<()> {
 		let file = File::open(&self.file)?;
 		let car = ContentAddressableArchive::load(file)?;
