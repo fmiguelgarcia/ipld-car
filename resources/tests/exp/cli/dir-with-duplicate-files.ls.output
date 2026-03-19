@@ -1,0 +1,5 @@
+Permissions  Size   User    Group   Date Modified         Name
+.r--r--r--   31B    {{user}}  {{group}}  {{date_modified}}   ascii-copy.txt
+.r--r--r--   31B    {{user}}  {{group}}  {{date_modified}}   ascii.txt
+.r--r--r--   12B    {{user}}  {{group}}  {{date_modified}}   hello.txt
+.r--r--r--   1026B  {{user}}  {{group}}  {{date_modified}}   multiblock.txt

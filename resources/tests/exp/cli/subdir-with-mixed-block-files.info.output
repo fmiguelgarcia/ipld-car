@@ -1,0 +1,7 @@
+File:            subdir-with-mixed-block-files.car
+Blocks:          10
+  Roots:         1
+  Non-roots:     9
+Total DAG-PB:    2.6kB
+Total Data:      2.1kB
+  [0] bafybeidh6k2vzukelqtrjsmd4p52cpmltd2ufqrdtdg6yigi73in672fwu

@@ -1,4 +1,4 @@
-use crate::commands::common::{fmt_size, pick_icon, SizeFormat};
+use crate::commands::common::{fmt_size, format_modified_time, pick_icon, SizeFormat};
 use ipld_car::{car::fs::CarFs, ContentAddressableArchive};
 
 use anyhow::{anyhow, Result};
@@ -41,27 +41,27 @@ impl SubCmdLs {
 
 	/// Runs the `ls` sub-command.
 	pub fn run(&self) -> Result<()> {
-		let (user, group) = get_car_file_owner(&self.file)?;
+		let (user, group, modified) = get_car_file_info(&self.file)?;
 		let file = File::open(&self.file)?;
 		let fs = CarFs::from(ContentAddressableArchive::load(file)?);
 
 		if self.tree {
-			self.print_tree(&fs, &user, &group)
+			self.print_tree(&fs, &user, &group, &modified)
 		} else {
-			self.print_list(&fs, &user, &group)
+			self.print_list(&fs, &user, &group, &modified)
 		}
 	}
 
 	/// Recursively collects all entries with tree connectors and renders a columnar table.
-	fn print_tree(&self, fs: &CarFs<File>, user: &str, group: &str) -> Result<()> {
+	fn print_tree(&self, fs: &CarFs<File>, user: &str, group: &str, modified: &str) -> Result<()> {
 		let mut rows: Vec<(&'static str, String, String)> = Vec::new();
 		collect_tree(fs, &self.path, "", self.size_format(), &mut rows)?;
-		print_table(build_cells(rows, user, group));
+		print_table(build_cells(rows, user, group, modified));
 		Ok(())
 	}
 
 	/// Lists direct children of `self.path` as a flat columnar table.
-	fn print_list(&self, fs: &CarFs<File>, user: &str, group: &str) -> Result<()> {
+	fn print_list(&self, fs: &CarFs<File>, user: &str, group: &str, modified: &str) -> Result<()> {
 		let size_format = self.size_format();
 		let entries: Vec<String> = fs.read_dir(&self.path)?.collect();
 		let rows: Vec<(&'static str, String, String)> = entries
@@ -71,14 +71,14 @@ impl SubCmdLs {
 				Ok((perms(file_type, suffix), size_str, format!("{icon} {name}{suffix}")))
 			})
 			.collect::<Result<_>>()?;
-		print_table(build_cells(rows, user, group));
+		print_table(build_cells(rows, user, group, modified));
 		Ok(())
 	}
 }
 
-/// Returns the username and group name of the CAR file owner.
+/// Returns the username, group name, and formatted modified date of the CAR file.
 #[cfg(unix)]
-fn get_car_file_owner(path: &PathBuf) -> Result<(String, String)> {
+fn get_car_file_info(path: &PathBuf) -> Result<(String, String, String)> {
 	use std::os::unix::fs::MetadataExt;
 	let metadata = std::fs::metadata(path)?;
 	let uid = metadata.uid();
@@ -89,17 +89,18 @@ fn get_car_file_owner(path: &PathBuf) -> Result<(String, String)> {
 	let group = get_group_by_gid(gid)
 		.map(|g| g.name().to_string_lossy().to_string())
 		.unwrap_or_else(|| gid.to_string());
-	Ok((user, group))
+	let modified = format_modified_time(&metadata);
+	Ok((user, group, modified))
 }
 
-/// Returns the username and group name of the CAR file owner.
+/// Returns the username, group name, and formatted modified date of the CAR file.
 #[cfg(not(unix))]
-fn get_car_file_owner(_path: &PathBuf) -> Result<(String, String)> {
-	Ok(("unknown".to_string(), "unknown".to_string()))
+fn get_car_file_info(_path: &PathBuf) -> Result<(String, String, String)> {
+	Ok(("unknown".to_string(), "unknown".to_string(), "-".to_string()))
 }
 
 /// Builds the flat cell list (header row + one row per entry) for the table grid.
-fn build_cells(rows: Vec<(&'static str, String, String)>, user: &str, group: &str) -> Vec<String> {
+fn build_cells(rows: Vec<(&'static str, String, String)>, user: &str, group: &str, modified: &str) -> Vec<String> {
 	let mut cells: Vec<String> = vec![
 		"Permissions".to_string(),
 		"Size".to_string(),
@@ -109,7 +110,7 @@ fn build_cells(rows: Vec<(&'static str, String, String)>, user: &str, group: &st
 		"Name".to_string(),
 	];
 	for (p, size, name) in rows {
-		cells.extend([p.to_string(), size, user.to_string(), group.to_string(), "-".to_string(), name]);
+		cells.extend([p.to_string(), size, user.to_string(), group.to_string(), modified.to_string(), name]);
 	}
 	cells
 }

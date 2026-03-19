@@ -1,0 +1,7 @@
+File:            dir-with-duplicate-files.car
+Blocks:          9
+  Roots:         1
+  Non-roots:     8
+Total DAG-PB:    2.6kB
+Total Data:      2.1kB
+  [0] bafybeihchr7vmgjaasntayyatmp5sv6xza57iy2h4xj7g46bpjij6yhrmy

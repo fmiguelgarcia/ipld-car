@@ -14,8 +14,8 @@ pub mod dag_pb;
 pub mod error;
 pub(crate) mod proto;
 
-#[cfg(test)]
-pub(crate) mod test_helpers;
+#[cfg(any(test, feature = "test_helpers"))]
+pub mod test_helpers;
 
 /// Trait combining Seek and Read, return value for opening files
 pub trait SeekAndRead: Seek + Read {}

@@ -1,3 +1,4 @@
+use std::fs::Metadata;
 use unit_prefix::NumberPrefix;
 use vfs::VfsFileType;
 
@@ -47,4 +48,18 @@ fn format_prefix(n: NumberPrefix<f64>) -> String {
 		NumberPrefix::Standalone(n) => format!("{n:.0}B"),
 		NumberPrefix::Prefixed(prefix, n) => format!("{n:.1}{prefix}B"),
 	}
+}
+
+/// Formats the file's modification time for display.
+pub(crate) fn format_modified_time(metadata: &Metadata) -> String {
+	metadata
+		.modified()
+		.ok()
+		.and_then(|t| {
+			use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+			let duration = t.duration_since(std::time::UNIX_EPOCH).ok()?;
+			let dt = OffsetDateTime::from_unix_timestamp(duration.as_secs().try_into().ok()?).ok()?;
+			dt.format(&Rfc3339).ok()
+		})
+		.unwrap_or_else(|| "-".to_string())
 }

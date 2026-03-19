@@ -1,0 +1,10 @@
+Permissions  Size  User    Group   Date Modified         Name
+drwxr-xr-x   -     {{user}}  {{group}}  {{date_modified}}  ├──  api/
+.r--r--r--   38B   {{user}}  {{group}}  {{date_modified}}  │   └──  file.txt
+drwxr-xr-x   -     {{user}}  {{group}}  {{date_modified}}  ├──  ipfs/
+.r--r--r--   39B   {{user}}  {{group}}  {{date_modified}}  │   └──  file.txt
+drwxr-xr-x   -     {{user}}  {{group}}  {{date_modified}}  ├──  ipns/
+.r--r--r--   39B   {{user}}  {{group}}  {{date_modified}}  │   └──  file.txt
+drwxr-xr-x   -     {{user}}  {{group}}  {{date_modified}}  └──  ą/
+drwxr-xr-x   -     {{user}}  {{group}}  {{date_modified}}      └──  ę/
+.r--r--r--   34B   {{user}}  {{group}}  {{date_modified}}          └──  file-źł.txt

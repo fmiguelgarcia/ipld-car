@@ -22,3 +22,12 @@ unit-prefix.workspace = true
 uutils_term_grid.workspace = true
 terminal_size.workspace = true
 users.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+ipld-car = { workspace = true, features = ["std", "vfs", "test_helpers"] }
+
+test-case.workspace = true
+test-log.workspace = true
+pretty_env_logger.workspace = true
+handlebars.workspace = true
