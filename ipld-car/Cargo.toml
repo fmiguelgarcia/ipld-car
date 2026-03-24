@@ -1,0 +1,70 @@
+[package]
+name = "ipld-car"
+version = "0.1.0"
+license.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+publish = false
+
+
+[dependencies]
+libipld = { workspace = true, features = ["dag-pb", "dag-json"] }
+
+# Derive helpers & tools
+derive_builder.workspace = true
+derive_more = { workspace = true, features = [
+	"from",
+	"into",
+	"constructor",
+	"as_ref",
+	"deref",
+	"debug",
+] }
+derivative.workspace = true
+derive-new.workspace = true
+strum.workspace = true
+
+# Extra containers
+bytes = { workspace = true, features = ["serde"] }
+
+# Units 
+nbytes.workspace = true
+
+# Serde 
+serde.workspace = true
+serde_bytes.workspace = true
+
+# VFS & Filesystem
+vfs = { workspace = true, optional = true }
+tempfile.workspace = true
+
+# CAR v1 — CBOR header serialisation (only with std)
+ciborium = { workspace = true, optional = true }
+leb128.workspace = true
+
+# Error & logs
+thiserror.workspace = true
+tracing.workspace = true
+
+# Proto
+prost = { workspace = true, features = ["derive"] }
+quick-protobuf.workspace = true
+
+# CLI support
+clap = { workspace = true, optional = true }
+
+
+[dev-dependencies]
+test-case.workspace = true
+test-log.workspace = true
+anyhow.workspace = true
+criterion.workspace = true
+
+[features]
+default = [ "std" ]
+jumbo-chunks = []
+test_helpers = []
+cli = [ "dep:clap" ]
+vfs = [ "dep:vfs" ]
+std = [ "bytes/std", "dep:ciborium", "derive_builder/std", "prost/std", "vfs" ]

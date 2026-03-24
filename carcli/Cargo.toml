@@ -1,0 +1,34 @@
+[package]
+name = "carcli"
+version = "0.1.0"
+license.workspace = true
+authors.workspace = true
+edition.workspace = true
+homepage.workspace = true
+publish = false
+description = "CLI tool for Content Addressable Archive (CAR) from IPLD"
+
+[[bin]]
+name = "carcli"
+path = "src/main.rs"
+
+[dependencies]
+ipld-car = { workspace = true, features = ["std", "vfs", "cli"] }
+
+clap.workspace = true
+anyhow.workspace = true
+vfs.workspace = true
+unit-prefix.workspace = true
+uutils_term_grid.workspace = true
+users.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+ipld-car = { workspace = true, features = ["std", "vfs", "test_helpers"] }
+
+test-case.workspace = true
+test-log.workspace = true
+pretty_env_logger.workspace = true
+handlebars.workspace = true
+tempfile.workspace = true
+regex.workspace = true

@@ -1,0 +1,4 @@
+Permissions  Size  User    Group   Date Modified         Name
+drwxr-xr-x   -     {{user}}  {{group}}  {{date_modified}}  └──  subdir/
+.r--r--r--   31B   {{user}}  {{group}}  {{date_modified}}      ├──  ascii.txt
+.r--r--r--   12B   {{user}}  {{group}}  {{date_modified}}      └──  hello.txt
