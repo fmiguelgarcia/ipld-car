@@ -1,6 +1,8 @@
-use crate::{dag_pb::DagPb, BoundedReader, ContextLen};
+use crate::{dag_pb::DagPb, error::Result, BoundedReader, CIDBuilder, Config, ContextLen};
 
 use derive_more::From;
+use libipld::Cid;
+use std::io::{Read, Seek};
 
 #[derive(From)]
 pub enum BlockContent<T> {
@@ -31,6 +33,20 @@ impl<T> ContextLen for BlockContent<T> {
 			Self::DagPb(dag) => dag.dag_pb_len(),
 		}
 	}
+
+	fn invalidate(&mut self) {
+		match self {
+			Self::Raw(..) => {},
+			Self::DagPb(dag) => dag.invalidate(),
+		}
+	}
+
+	fn was_invalidated(&self) -> bool {
+		match self {
+			Self::Raw(..) => false,
+			Self::DagPb(dag) => dag.was_invalidated(),
+		}
+	}
 }
 
 impl<T> std::fmt::Debug for BlockContent<T> {
@@ -38,6 +54,18 @@ impl<T> std::fmt::Debug for BlockContent<T> {
 		match self {
 			Self::Raw(reader) => f.debug_tuple("Raw").field(reader).finish(),
 			Self::DagPb(dag) => f.debug_tuple("DagPb").field(dag).finish(),
+		}
+	}
+}
+
+// Ipld & CID related
+// ===========================================================================
+
+impl<T: Read + Seek> CIDBuilder for BlockContent<T> {
+	fn cid(&self, config: &Config) -> Result<Cid> {
+		match self {
+			Self::DagPb(dag) => dag.cid(config),
+			Self::Raw(..) => unimplemented!("Cid of Raw content"),
 		}
 	}
 }

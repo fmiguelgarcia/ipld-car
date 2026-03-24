@@ -7,6 +7,7 @@ use crate::{
 
 use std::{
 	io::{Read, Result as IoResult, Seek, SeekFrom, Write},
+	path::{Path, PathBuf},
 	sync::{Arc, Mutex},
 };
 
@@ -18,6 +19,7 @@ where
 {
 	car: Arc<Mutex<ContentAddressableArchive<T>>>,
 	parent: ArenaId,
+	parent_path: PathBuf,
 	name: String,
 	writer: Option<W>,
 }
@@ -28,16 +30,19 @@ where
 	W: Write + Seek + CarFile,
 	Error: From<<W as CarFile>::IntoReaderErr>,
 {
-	pub fn new(fs: &CarFs<T>, parent: ArenaId, name: String, writer: W) -> Self {
+	pub fn new(fs: &CarFs<T>, parent: ArenaId, parent_path: &Path, name: String, writer: W) -> Self {
 		let car = Arc::clone(&fs.car);
-		Self { car, parent, name, writer: Some(writer) }
+		let parent_path = parent_path.to_path_buf();
+		let writer = Some(writer);
+
+		Self { car, parent, name, parent_path, writer }
 	}
 
 	fn ref_add_to_car(&mut self) -> Result<()> {
 		if let Some(mut writer) = self.writer.take() {
 			writer.seek(SeekFrom::Start(0))?;
 			let reader = writer.into_reader()?;
-			self.car.lock()?.add_file(self.name.clone(), self.parent, reader.into())?;
+			self.car.lock()?.add_file(self.name.clone(), self.parent, &self.parent_path, reader.into())?;
 		}
 
 		Ok(())

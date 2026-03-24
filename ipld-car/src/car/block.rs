@@ -1,11 +1,11 @@
 use crate::{
 	arena::ArenaItem,
 	car::block_content::BlockContent,
-	config::{CidCodec, Config},
-	dag_pb::{DagPb, Link, ReaderWithLen},
+	config::Config,
+	dag_pb::{DagPb, Link},
 	ensure,
 	error::{DagPbResult, Error, Result},
-	fail, Arena, BoundedReader, ContextLen,
+	fail, Arena, BoundedReader, CIDBuilder, ContextLen, ReaderWithLen,
 };
 
 use derivative::Derivative;
@@ -17,22 +17,18 @@ use std::io::{self, copy, Read, Seek, Write};
 #[derivative(Clone)]
 pub struct Block<T> {
 	#[new(into)]
-	cid: Option<Cid>,
+	pub cid: Option<Cid>,
 	#[derivative(Clone(bound = ""))]
 	#[new(into)]
-	pub(crate) content: BlockContent<T>,
+	pub content: BlockContent<T>,
 }
 
 impl<T> Block<T> {
-	pub fn cid(&self) -> Option<&Cid> {
-		self.cid.as_ref()
-	}
-
 	pub fn push_directory_entry(&mut self, name: String, link: Link) -> DagPbResult<()> {
 		if let BlockContent::DagPb(DagPb::Dir(directory)) = &mut self.content {
 			ensure!(!directory.entries().contains_key(&name), io::Error::from(io::ErrorKind::AlreadyExists));
 			directory.mut_entries().insert(name, link);
-			self.cid.take();
+			self.invalidate();
 
 			Ok(())
 		} else {
@@ -49,6 +45,15 @@ impl<T> ContextLen for Block<T> {
 	fn dag_pb_len(&self) -> u64 {
 		self.content.dag_pb_len()
 	}
+
+	fn invalidate(&mut self) {
+		self.cid = None;
+		self.content.invalidate()
+	}
+
+	fn was_invalidated(&self) -> bool {
+		self.cid.is_none() || self.content.was_invalidated()
+	}
 }
 
 impl<T: Read + Seek> ArenaItem for Block<T> {
@@ -59,6 +64,7 @@ impl<T: Read + Seek> ArenaItem for Block<T> {
 		self.cid
 	}
 
+	/*
 	fn children(&self) -> Vec<Self> {
 		match &self.content {
 			BlockContent::DagPb(DagPb::MultiBlockFile(mbf)) => {
@@ -75,7 +81,7 @@ impl<T: Read + Seek> ArenaItem for Block<T> {
 						let codec = CidCodec::try_from(link.cid.codec()).expect("Generated block uses valid CID codec");
 						let block = match codec {
 							CidCodec::Raw => Block::new(link.cid, BlockContent::Raw(sub_reader)),
-							CidCodec::DagPb => {
+						CidCodec::DagPb => {
 								let child_id = DagPb::load(&mut local_arena, link.cid, sub_reader)
 									.expect("Block previously loaded .qed");
 								let block_ref = local_arena.get(child_id).expect("Node inserted previously .qed");
@@ -94,12 +100,22 @@ impl<T: Read + Seek> ArenaItem for Block<T> {
 			_ => vec![],
 		}
 	}
+	*/
 }
 
 impl<T> std::fmt::Debug for Block<T> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		let cid = self.cid.as_ref().map(Cid::to_string);
 		f.debug_struct("Block").field("cid", &cid).field("content", &self.content).finish()
+	}
+}
+
+// Ipld & CID related
+// ===========================================================================
+
+impl<T: Seek + Read> CIDBuilder for Block<T> {
+	fn cid(&self, config: &Config) -> Result<Cid> {
+		self.content.cid(config)
 	}
 }
 
@@ -118,14 +134,14 @@ impl<T: Read + Seek + 'static> Block<T> {
 
 fn write_dag_pb<W: Write, T: Read + Seek + 'static>(
 	w: &mut W,
-	arena: &Arena<Block<T>>,
+	_arena: &Arena<Block<T>>,
 	cid: Option<&Cid>,
 	dag_pb: &DagPb<T>,
 	_config: &Config,
 ) -> Result<u64> {
 	match cid {
 		Some(cid) => {
-			let ReaderWithLen { mut reader, len } = dag_pb.content_writer(arena)?;
+			let ReaderWithLen { mut reader, len } = dag_pb.as_reader_with_len()?;
 			write_block(cid, &mut reader, len, w)
 		},
 		None => unimplemented!("Block:write_dag_pb"),

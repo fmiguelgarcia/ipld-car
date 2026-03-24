@@ -1,18 +1,16 @@
 use crate::{
 	arena::{Arena, ArenaId},
 	car::Block,
-	config::{CidCodec, Config},
 	ensure,
-	error::{DagPbErr, DagPbResult, NotSupportedErr, UnixFsErr},
+	error::{DagPbErr, DagPbResult, UnixFsErr},
 	fail,
 	proto::{self, data::DataType},
-	BoundedReader, ContextLen,
+	reader_with_len::ReaderWithLen,
+	BoundedReader, CIDBuilder, Config, ContextLen,
 };
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use derive_more::From;
+use bytes::{BufMut, Bytes, BytesMut};
 use libipld::{
-	multihash::MultihashDigest,
 	pb::{PbLink, PbNode},
 	Cid,
 };
@@ -39,7 +37,7 @@ pub use link::Link;
 const BUF_LIMIT: usize = bytes!(2; MiB);
 const BUF_CAPS: &[usize] = &[bytes!(4; KiB), bytes!(16; KiB), bytes!(128; KiB), bytes!(512; KiB), bytes!(1; MiB)];
 
-#[derive(derive_more::Debug, From)]
+#[derive(derive_more::Debug)]
 pub enum DagPb<T> {
 	Dir(Directory),
 	SingleBlockFile(SingleBlockFile<T>),
@@ -73,6 +71,24 @@ impl<T> ContextLen for DagPb<T> {
 			Self::MultiBlockFile(mbf) => mbf.dag_pb_len(),
 			Self::Dir(dir) => dir.dag_pb_len(),
 			Self::Symlink(symlink) => symlink.dag_pb_len(),
+		}
+	}
+
+	fn invalidate(&mut self) {
+		match self {
+			Self::SingleBlockFile(sbf) => sbf.invalidate(),
+			Self::MultiBlockFile(mbf) => mbf.invalidate(),
+			Self::Dir(dir) => dir.invalidate(),
+			Self::Symlink(symlink) => symlink.invalidate(),
+		}
+	}
+
+	fn was_invalidated(&self) -> bool {
+		match self {
+			Self::SingleBlockFile(sbf) => sbf.was_invalidated(),
+			Self::MultiBlockFile(mbf) => mbf.was_invalidated(),
+			Self::Dir(dir) => dir.was_invalidated(),
+			Self::Symlink(symlink) => symlink.was_invalidated(),
 		}
 	}
 }
@@ -122,7 +138,7 @@ fn load_symlink<T: Read + Seek>(
 	let block = Block::new(cid, DagPb::Symlink(Symlink::new(posix_path_utf8)));
 	tracing::debug!(?block, "DagPb symlink loaded");
 
-	Ok(arena.push(block))
+	Ok(arena.push(block, None))
 }
 
 fn load_file<T: Read + Seek>(
@@ -152,9 +168,9 @@ fn load_file<T: Read + Seek>(
 		})
 		.collect::<Vec<_>>();
 	let mbf = MultiBlockFile::new(links.clone(), reader.clone());
-	let block = Block::new(cid, DagPb::from(mbf));
+	let block = Block::new(cid, DagPb::MultiBlockFile(mbf));
 	tracing::debug!(?block, "DagPb file loaded");
-	let id = arena.push(block);
+	let id = arena.push(block, None);
 
 	/*
 	// Add children recursivelly.
@@ -193,9 +209,10 @@ fn single_block_file<T: Read + Seek>(
 	};
 	let block = Block::new(cid, DagPb::SingleBlockFile(sbf_content.into()));
 	tracing::debug!(?block, "DagPb single block loaded");
-	Ok(arena.push(block))
+	Ok(arena.push(block, None))
 }
 
+/*
 /// Computes the DagPb CID for a directory with the given named links, using the hash
 /// algorithm and codec defined in `config`.
 pub(crate) fn dir_cid(dir: &Directory, config: &Config) -> DagPbResult<Cid> {
@@ -208,6 +225,7 @@ pub(crate) fn dir_cid(dir: &Directory, config: &Config) -> DagPbResult<Cid> {
 	let digest = config.hash_code.digest(&buf);
 	Ok(Cid::new_v1(config.cid_codec as u64, digest))
 }
+*/
 
 fn load_directory<T: Read + Seek>(
 	arena: &mut Arena<Block<T>>,
@@ -225,7 +243,7 @@ fn load_directory<T: Read + Seek>(
 
 	let block = Block::new(cid, DagPb::Dir(Directory::from(dir_entries)));
 	tracing::debug!(?block, "DagPb directory load");
-	let id = arena.push(block);
+	let id = arena.push(block, None);
 	Ok(id)
 }
 
@@ -268,77 +286,47 @@ fn buf_caps(block_len: u64) -> Vec<usize> {
 	buf_caps
 }
 
-// Write part
+// Ipld & CID related
 // ===========================================================================
 
-impl<T: Read + Seek + 'static> DagPb<T> {
-	pub fn content_writer(&self, _arena: &Arena<Block<T>>) -> DagPbResult<ReaderWithLen> {
-		match self {
-			Self::Dir(directory) => directory_conent_writer(directory),
-			Self::SingleBlockFile(sbf) => single_block_file_writer(sbf),
-			Self::Symlink(symlink) => Ok(symlink_writer(symlink)),
-			Self::MultiBlockFile(mbf) => Ok(multi_block_file_writer(mbf)),
+impl<T> From<&DagPb<T>> for PbNode {
+	fn from(dag: &DagPb<T>) -> Self {
+		match dag {
+			DagPb::Dir(directory) => directory.into(),
+			DagPb::SingleBlockFile(sbf) => sbf.into(),
+			DagPb::Symlink(symlink) => symlink.into(),
+			DagPb::MultiBlockFile(mbf) => mbf.into(),
 		}
 	}
 }
 
-fn multi_block_file_writer<T>(mbf: &MultiBlockFile<T>) -> ReaderWithLen {
-	let pb_node = PbNode::from(mbf);
-	tracing::debug!(?pb_node, "Write MBF");
-	let enc_pb_node = Bytes::from(pb_node.into_bytes());
-	let enc_pb_node_len = enc_pb_node.len() as u64;
-
-	ReaderWithLen::new(enc_pb_node.reader(), enc_pb_node_len)
+impl<T: Read + Seek + 'static> DagPb<T> {
+	pub fn as_reader_with_len(&self) -> Result<ReaderWithLen, crate::error::Error> {
+		let this = match self {
+			DagPb::Dir(directory) => PbNode::from(directory).into(),
+			DagPb::SingleBlockFile(sbf) => sbf.as_reader_with_len()?,
+			DagPb::Symlink(symlink) => PbNode::from(symlink).into(),
+			DagPb::MultiBlockFile(mbf) => PbNode::from(mbf).into(),
+		};
+		Ok(this)
+	}
 }
 
-fn symlink_writer(s: &Symlink) -> ReaderWithLen {
-	let pb_node = PbNode::from(s);
-	tracing::debug!(?pb_node, "Write symlink");
-	let enc_pb_node = Bytes::from(pb_node.into_bytes());
-	let enc_pb_node_len = enc_pb_node.len() as u64;
-
-	ReaderWithLen::new(enc_pb_node.reader(), enc_pb_node_len)
-}
-
-fn directory_conent_writer(dir: &Directory) -> DagPbResult<ReaderWithLen> {
-	let pb_node = PbNode::from(dir);
-	tracing::debug!(?pb_node, "Write directory");
-	let enc_pb_node = Bytes::from(pb_node.into_bytes());
-	let enc_pb_node_len = enc_pb_node.len() as u64;
-
-	Ok(ReaderWithLen::new(enc_pb_node.reader(), enc_pb_node_len))
-}
-
-fn single_block_file_writer<T: Read + Seek + 'static>(sbf: &SingleBlockFile<T>) -> DagPbResult<ReaderWithLen> {
-	let pb_node = PbNode::from(sbf);
-	tracing::debug!(?pb_node, "Write SBF");
-	let enc_pb_node = Bytes::from(pb_node.into_bytes());
-	let enc_pb_node_len = enc_pb_node.len() as u64;
-
-	match sbf.content() {
-		SBFContent::Data(..) => Ok(ReaderWithLen::new(enc_pb_node.reader(), enc_pb_node_len)),
-		SBFContent::Reader(reader) => {
-			let chained_reader = enc_pb_node.reader().chain(reader.clone_and_rewind());
-			let len = enc_pb_node_len.checked_add(reader.bound_len()).ok_or(DagPbErr::FileTooLarge)?;
-			Ok(ReaderWithLen::new(chained_reader, len))
-		},
+impl<T: Read + Seek> CIDBuilder for DagPb<T> {
+	fn cid(&self, config: &Config) -> Result<Cid, crate::error::Error> {
+		match self {
+			Self::Dir(directory) => directory.cid(config),
+			Self::SingleBlockFile(sbf) => sbf.cid(config),
+			Self::Symlink(symlink) => symlink.cid(config),
+			Self::MultiBlockFile(mbf) => mbf.cid(config),
+		}
 	}
 }
 
 // Utility structs
 // ===========================================================
 
-pub struct ReaderWithLen {
-	pub reader: Box<dyn Read>,
-	pub len: u64,
-}
-
-impl ReaderWithLen {
-	pub fn new<R: Read + 'static>(reader: R, len: u64) -> Self {
-		Self { reader: Box::new(reader), len }
-	}
-}
-
+/*
 pub trait BuildCid {
 	fn build_cid(&self, config: &Config) -> crate::error::Result<Cid>;
 }
@@ -348,7 +336,7 @@ where
 	PbNode: for<'a> From<&'a T>,
 {
 	fn build_cid(&self, config: &Config) -> crate::error::Result<Cid> {
-		let mut hasher = config.hasher().ok_or(NotSupportedErr::Hasher(config.hash_code))?;
+		let mut hasher = config.hasher()?;
 		let pb_node = PbNode::from(self).into_bytes();
 		hasher.update(&pb_node);
 		drop(pb_node);
@@ -358,3 +346,4 @@ where
 		Ok(cid)
 	}
 }
+*/

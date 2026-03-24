@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, slice::Iter};
+use std::{
+	collections::BTreeMap,
+	slice::{Iter, IterMut},
+};
 
 use derivative::Derivative;
 
@@ -10,9 +13,12 @@ pub trait ArenaItem {
 	type Id: Ord;
 
 	fn index(&self) -> Option<Self::Id>;
+	/*
+	fn parent_id(&self) -> Option<ArenaId>;
 	fn children(&self) -> Vec<Self>
 	where
 		Self: Sized;
+	*/
 }
 
 /// Arena allocator with optional indexed lookup. Stores items in a vector and maintains an
@@ -26,12 +32,13 @@ pub trait ArenaItem {
 pub struct Arena<T: ArenaItem> {
 	items: Vec<T>,
 	index: BTreeMap<T::Id, ArenaId>,
+	parents: BTreeMap<ArenaId, Vec<ArenaId>>,
 }
 
 impl<T: ArenaItem> Arena<T> {
 	/// Creates a new arena with pre-allocated capacity.
 	pub fn with_capacity(capacity: usize) -> Self {
-		Self { items: Vec::with_capacity(capacity), index: BTreeMap::new() }
+		Self { items: Vec::with_capacity(capacity), index: BTreeMap::new(), parents: BTreeMap::new() }
 	}
 
 	/// Returns the ArenaId that will be assigned to the next item pushed.
@@ -41,27 +48,43 @@ impl<T: ArenaItem> Arena<T> {
 	}
 
 	/// Pushes a new item into the arena, returns its ArenaId.
-	pub fn push(&mut self, item: T) -> ArenaId {
+	pub fn push<P>(&mut self, item: T, parent: P) -> ArenaId
+	where
+		P: Into<Option<ArenaId>>,
+	{
 		// Insert `item` and index it.
 		let id = self.items.len();
 		if let Some(idx) = item.index() {
 			self.index.insert(idx, id);
+		}
+		if let Some(parent) = parent.into() {
+			// DEV: That way we keep the insertion order.
+			let parents = self.parents.entry(id).or_default();
+			if !parents.contains(&parent) {
+				parents.push(parent);
+			}
 		}
 		self.items.push(item);
 
 		id
 	}
 
+	/*
 	pub fn recursive_push(&mut self, item: T) -> ArenaId {
 		let children = item.children();
 		let id = self.push(item);
 		let _child_ids = children.into_iter().map(|child| self.push(child)).collect::<Vec<_>>();
 		id
 	}
+	*/
 
 	/// Returns an iterator over all items in the arena.
 	pub fn iter(&self) -> Iter<'_, T> {
 		self.items.iter()
+	}
+
+	pub fn iter_mut(&mut self) -> IterMut<'_, T> {
+		self.items.iter_mut()
 	}
 
 	/// Returns a reference to the item with the given ArenaId.
@@ -92,5 +115,9 @@ impl<T: ArenaItem> Arena<T> {
 	pub fn get_mut_by_index(&mut self, idx: &T::Id) -> Option<&mut T> {
 		let id = self.get_id_by_index(idx)?;
 		self.get_mut(id)
+	}
+
+	pub fn parent_of(&self, id: ArenaId) -> Vec<ArenaId> {
+		self.parents.get(&id).cloned().unwrap_or_default()
 	}
 }

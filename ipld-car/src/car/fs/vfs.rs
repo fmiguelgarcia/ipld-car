@@ -49,7 +49,7 @@ where
 		let parent_id = self.lock()?.path_to_block_id(parent_path)?;
 		let writer = <T as CarFile>::Writer::temporal()?;
 
-		let defered_appender = DeferedAppendFile::new(self, parent_id, file_name.to_string(), writer);
+		let defered_appender = DeferedAppendFile::new(self, parent_id, parent_path, file_name.to_string(), writer);
 		Ok(Box::new(defered_appender))
 	}
 
@@ -119,13 +119,6 @@ where
 		Err(VfsError::from(VfsErrorKind::NotSupported))
 	}
 }
-
-/*
-fn path_to_mut_block<'a, T>(car: &'a mut ContentAddressableArchive<T>, path: &Path) -> CarResult<&'a mut Block<T>> {
-	let found_id = car.path_to_block_id(path)?;
-	car.arena.get_mut(found_id).ok_or_else(|| CarErr::from(CarNotFound::ArenaId(found_id)))
-}
-*/
 
 fn car_lock<T: Read + Seek>(
 	car: &Arc<Mutex<ContentAddressableArchive<T>>>,

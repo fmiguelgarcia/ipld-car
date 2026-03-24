@@ -13,7 +13,9 @@ name = "carcli"
 path = "src/main.rs"
 
 [dependencies]
-ipld-car = { workspace = true, features = ["std", "vfs"] }
+ipld-car = { workspace = true, features = ["std", "vfs", "cli"] }
+
+libipld = { workspace = true, features = ["dag-pb", "dag-json"] }
 
 clap.workspace = true
 anyhow.workspace = true
@@ -31,3 +33,4 @@ test-case.workspace = true
 test-log.workspace = true
 pretty_env_logger.workspace = true
 handlebars.workspace = true
+tempfile.workspace = true

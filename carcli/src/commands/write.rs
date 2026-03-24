@@ -14,12 +14,14 @@ pub struct SubCmdWrite {
 	/// Files to add (format: <dest-path>=<src-file>)
 	#[arg(short, long = "add", value_name = "DEST=SRC")]
 	entries: Vec<String>,
+
+	#[command(flatten)]
+	config: Config,
 }
 
 impl SubCmdWrite {
 	pub fn run(&self) -> Result<()> {
-		let car = ContentAddressableArchive::new(Config::default())?;
-		let fs: CarFs<File> = car.into();
+		let fs = CarFs::from(ContentAddressableArchive::new(self.config.clone())?);
 
 		for entry in &self.entries {
 			let (dest, src) =
@@ -42,7 +44,7 @@ impl SubCmdWrite {
 			drop(writer);
 		}
 
-		let car = fs.into_inner().ok_or_else(|| anyhow!("CAR is still referenced"))?;
+		let mut car = fs.into_inner().ok_or_else(|| anyhow!("CAR is still referenced"))?;
 		let out_file = File::create(self.output.as_path())?;
 		let mut writer = BufWriter::new(out_file);
 		let bytes = car.write(&mut writer)?;

@@ -4,6 +4,8 @@ use clap::Subcommand;
 mod cat;
 pub(crate) mod common;
 use cat::SubCmdCat;
+mod create;
+use create::SubCmdCreate;
 mod info;
 use info::SubCmdInfo;
 mod ls;
@@ -24,6 +26,9 @@ pub enum Commands {
 
 	/// Print the content of a file within a CAR file
 	Cat(SubCmdCat),
+
+	/// Create a new CAR file by recursively adding a directory or file
+	Create(SubCmdCreate),
 }
 
 impl Commands {
@@ -34,6 +39,7 @@ impl Commands {
 			Commands::Ls(cmd) => cmd.run(),
 			Commands::Write(cmd) => cmd.run(),
 			Commands::Cat(cmd) => cmd.run(),
+			Commands::Create(cmd) => cmd.run(),
 		}
 	}
 }

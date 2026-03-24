@@ -10,9 +10,13 @@ pub use car::fs::CarFs;
 pub use car::ContentAddressableArchive;
 pub mod config;
 pub use config::Config;
+pub(crate) mod cid_builder;
+pub(crate) use cid_builder::CIDBuilder;
 pub mod dag_pb;
 pub mod error;
 pub(crate) mod proto;
+pub(crate) mod reader_with_len;
+pub(crate) use reader_with_len::ReaderWithLen;
 
 #[cfg(any(test, feature = "test_helpers"))]
 pub mod test_helpers;
@@ -28,6 +32,8 @@ impl<T> SeekAndWrite for T where T: Seek + Write {}
 pub trait ContextLen {
 	fn data_len(&self) -> u64;
 	fn dag_pb_len(&self) -> u64;
+	fn invalidate(&mut self);
+	fn was_invalidated(&self) -> bool;
 }
 
 // Helper macros

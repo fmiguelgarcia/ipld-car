@@ -1,4 +1,4 @@
-use crate::{proto, ContextLen};
+use crate::{cid_builder::DagPbCidDefaultBuilder, proto, ContextLen};
 
 use bytes::Bytes;
 use derive_new::new;
@@ -19,13 +19,6 @@ impl Clone for Symlink {
 	}
 }
 
-impl From<&Symlink> for PbNode {
-	fn from(s: &Symlink) -> Self {
-		let data = Bytes::from(proto::Data::new_symlink(s.posix_path.as_str()).encode_to_vec());
-		proto::new_pb_node(vec![], data)
-	}
-}
-
 impl ContextLen for Symlink {
 	#[inline]
 	fn data_len(&self) -> u64 {
@@ -39,5 +32,25 @@ impl ContextLen for Symlink {
 		}
 
 		self.dag_len_cache.load(Relaxed)
+	}
+
+	fn invalidate(&mut self) {
+		self.dag_len_cache.store(0, Relaxed);
+	}
+
+	fn was_invalidated(&self) -> bool {
+		self.dag_len_cache.load(Relaxed) == 0
+	}
+}
+
+// Ipld & CID related
+// ===========================================================================
+
+impl DagPbCidDefaultBuilder for Symlink {}
+
+impl From<&Symlink> for PbNode {
+	fn from(s: &Symlink) -> Self {
+		let data = Bytes::from(proto::Data::new_symlink(s.posix_path.as_str()).encode_to_vec());
+		proto::new_pb_node(vec![], data)
 	}
 }

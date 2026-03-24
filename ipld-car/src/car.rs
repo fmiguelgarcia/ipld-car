@@ -23,11 +23,12 @@ use crate::{
 	dag_pb::{DagPb, Directory},
 	ensure,
 	error::{CidErr, Error, InvalidErr, NotFoundErr, Result},
-	fail, BoundedReader, ContextLen,
+	fail, BoundedReader, CIDBuilder, ContextLen,
 };
 
 use libipld::{pb::PbNode, Cid};
 use std::{
+	collections::VecDeque,
 	fs::File,
 	io::{Read, Seek, SeekFrom, Write},
 };
@@ -61,27 +62,31 @@ impl ContentAddressableArchive<File> {
 		let content = BoundedReader::from_reader(tempfile()?)?;
 		let mut arena = Arena::default();
 		let dir = Directory::default();
-		let root_dir_cid = dir_cid(&dir, &config)?;
-		let root_id = arena.push(Block::new(root_dir_cid, DagPb::Dir(dir)));
+		let root_dir_cid = dir.cid(&config)?;
+		let root_id = arena.push(Block::new(root_dir_cid, DagPb::Dir(dir)), None);
 
 		Ok(Self { content, roots: vec![root_id], arena, config })
 	}
 }
 
 impl<T: Read + Seek> ContentAddressableArchive<T> {
-	pub fn add_file(&mut self, name: String, parent_id: ArenaId, reader: T) -> Result<()> {
+	pub fn add_file(&mut self, name: String, parent_id: ArenaId, parent_path: &Path, reader: T) -> Result<()> {
 		// Create Tree of `reader`.
 		let bounded = BoundedReader::from_reader(reader)?;
 		let block_builder = BlockBuilder::new(bounded, self.config)?;
 		let block = block_builder.build()?;
-		let cid = *block.cid().expect("Generated block has CID .qed");
+		let cid = block.cid.expect("Generated block has CID .qed");
 		let link = Link::new(cid, block.dag_pb_len(), Some(block.data_len()), name.clone(), None);
 
 		// Add block (recursivelly to arena).
-		let id = self.arena.push(block);
+		let id = self.arena.push(block, parent_id);
 
-		let parent = self.arena.get_mut(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
-		parent.push_directory_entry(name, link.with_arena_id(id))?;
+		{
+			let parent = self.arena.get_mut(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
+			parent.push_directory_entry(name, link.with_arena_id(id))?;
+		}
+
+		self.invalidate_cid_on_ancestors(parent_path);
 		Ok(())
 	}
 
@@ -92,7 +97,7 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 			.into_iter()
 			.map(|id| {
 				let block = self.arena.get(id).ok_or(NotFoundErr::ArenaId(id))?;
-				let cid = *block.cid().expect("Block SHOULD have CID until we add files");
+				let cid = block.cid.expect("Block SHOULD have CID until we add files");
 				Ok(cid)
 			})
 			.collect()
@@ -107,7 +112,6 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 // VFS support
 // ===========================================================================
 
-use crate::dag_pb::dir_cid;
 #[cfg(feature = "vfs")]
 use crate::dag_pb::Link;
 #[cfg(feature = "vfs")]
@@ -166,34 +170,19 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 
 	pub fn path_to_cid(&self, path: &Path) -> Result<Option<Cid>> {
 		let id = self.path_to_block_id(path)?;
-		let cid = self.arena.get(id).and_then(|block| block.cid()).cloned();
+		let cid = self.arena.get(id).and_then(|block| block.cid);
 		Ok(cid)
 	}
 
-	/*
 	fn path_to_mut_block(&mut self, path: &Path) -> Result<&'_ mut Block<T>> {
 		let found_id = self.path_to_block_id(path)?;
 		self.arena.get_mut(found_id).ok_or_else(|| Error::from(NotFoundErr::ArenaId(found_id)))
 	}
-	*/
 
 	pub(crate) fn path_to_block(&self, path: &Path) -> Result<&'_ Block<T>> {
 		let found_id = self.path_to_block_id(path)?;
 		self.arena.get(found_id).ok_or_else(|| Error::from(NotFoundErr::ArenaId(found_id)))
 	}
-
-	/*
-	pub fn create_file(&self, path: &Path) -> Result<BufWriter<File>> {
-		let parent = path.parent().unwrap_or_else(|| Path::new("/"));
-		let file_name = path.file_name().and_then(OsStr::to_str).ok_or( InvalidErr::Path( path.as_os_str().to_string_lossy().to_string()))?;
-		let parent_block = self.path_to_mut_block(parent)?;
-
-		let link = Link::new(cid, cumulative_dag_size, arena_id)
-		parent_block.push_directory_entry(file_name, link)?;
-
-
-		let tmp = BufWriter::new(tempfile()?);
-	}*/
 
 	/// Creates a new empty directory at `parent_path/dir_name`.
 	pub fn create_dir(&mut self, parent_path: &Path, dir_name: &str) -> Result<()> {
@@ -215,21 +204,34 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 		// The returned ArenaId is stored in the Link so that path resolution can find this
 		// specific block even when other empty directories share the same CID.
 		let new_dir = Directory::default();
+		let new_dir_cid = new_dir.cid(&self.config)?;
 		let new_dir_pb_len = PbNode::from(&new_dir).into_bytes().len() as u64;
-		let new_dir_cid = dir_cid(&new_dir, &self.config)?;
-		let new_dir_arena_id = self.arena.push(Block::new(new_dir_cid, DagPb::Dir(Directory::default())));
+		let new_dir_arena_id = self.arena.push(Block::new(new_dir_cid, DagPb::Dir(Directory::default())), parent_id);
 
-		// Insert a Link to the new directory in the parent.
+		// Insert a Link to the new directory in the parent and invalidate its CID.
 		let parent = self.arena.get_mut(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
 		match &mut parent.content {
 			BlockContent::DagPb(DagPb::Dir(dir)) => {
 				let link = Link::new(new_dir_cid, new_dir_pb_len, None, dir_name.to_string(), new_dir_arena_id);
 				dir.mut_entries().insert(dir_name.to_string(), link);
+
+				self.invalidate_cid_on_ancestors(parent_path);
 			},
 			_ => unreachable!("already verified above"),
 		}
 
 		Ok(())
+	}
+
+	/// Invalidates `parent_path` and all its ancestors.
+	fn invalidate_cid_on_ancestors(&mut self, parent_path: &Path) {
+		let mut maybe_ancestor_path = Some(parent_path);
+		while let Some(ancestor_path) = maybe_ancestor_path.take() {
+			if let Ok(block) = self.path_to_mut_block(ancestor_path) {
+				block.invalidate();
+			}
+			maybe_ancestor_path = ancestor_path.parent();
+		}
 	}
 
 	pub(crate) fn metadata_by_ref(&self, block: &Block<T>) -> VfsResult<VfsMetadata> {
@@ -280,7 +282,7 @@ impl<F: Read + Seek> ContentAddressableArchive<F> {
 			let _id = match codec {
 				CidCodec::Raw => {
 					let block = Block::new(block_def.cid, block_reader);
-					arena.push(block)
+					arena.push(block, None)
 				},
 				CidCodec::DagPb => DagPb::load(&mut arena, block_def.cid, block_reader)?,
 				_other => fail!(CidErr::CodecNotSupported(cid_codec)),
@@ -291,11 +293,12 @@ impl<F: Read + Seek> ContentAddressableArchive<F> {
 		}
 
 		// Get roots IDs.
+		// TODO: Regenerate parent relations recursivelly.
 		let roots = header
 			.roots
 			.iter()
 			.filter_map(|cid| {
-				let (idx, _) = arena.iter().enumerate().find(|(_idx, entry)| entry.cid() == Some(&cid.0))?;
+				let (idx, _) = arena.iter().enumerate().find(|(_idx, entry)| entry.cid.as_ref() == Some(&cid.0))?;
 				Some(idx)
 			})
 			.collect::<Vec<_>>();
@@ -309,7 +312,9 @@ impl<F: Read + Seek> ContentAddressableArchive<F> {
 // ===========================================================================
 
 impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
-	pub fn write<W: Write>(&self, writer: &mut W) -> Result<u64> {
+	pub fn write<W: Write>(&mut self, writer: &mut W) -> Result<u64> {
+		self.rebuild_invalids()?;
+
 		// Write header
 		let header = CarHeader::new_v1(self.root_cids()?);
 		let header_written = header.write(writer)? as u64;
@@ -327,5 +332,50 @@ impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
 		}
 
 		header_written.checked_add(acc_block_written).ok_or(Error::FileTooLarge)
+	}
+
+	/// Recomputes CIDs for all directory blocks whose CID has been invalidated (set to `None`),
+	/// processing from highest arena index to lowest so children are finalized before parents.
+	///
+	/// # BUG
+	///
+	/// - We have to review if the order of closing `DeferedAppendFile` could invalidate this
+	/// strategy.
+	fn rebuild_invalids(&mut self) -> Result<()> {
+		let mut invalidated_ids = self
+			.arena
+			.iter()
+			.enumerate()
+			.filter_map(|(id, block)| block.was_invalidated().then_some(id))
+			.collect::<VecDeque<_>>();
+
+		while let Some(id) = invalidated_ids.pop_back() {
+			if let Some(block) = self.arena.get_mut(id) {
+				if block.was_invalidated() {
+					block.cid = block.cid(&self.config)?.into();
+					let _ = block;
+
+					// Invalidate ancestors
+					loop {
+						let parent_ids = self.arena.parent_of(id);
+						if parent_ids.is_empty() {
+							break;
+						}
+
+						// Invalidate any parent of this
+						for parent_id in parent_ids {
+							if !invalidated_ids.contains(&parent_id) {
+								if let Some(parent_block) = self.arena.get_mut(parent_id) {
+									parent_block.invalidate();
+								}
+								invalidated_ids.push_front(parent_id);
+							}
+						}
+					}
+				}
+			}
+		}
+
+		Ok(())
 	}
 }

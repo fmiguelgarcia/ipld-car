@@ -1,4 +1,4 @@
-use crate::{dag_pb::Link, proto, BoundedReader, ContextLen};
+use crate::{cid_builder::DagPbCidDefaultBuilder, dag_pb::Link, proto, BoundedReader, ContextLen};
 
 use bytes::Bytes;
 use derive_new::new;
@@ -40,15 +40,6 @@ impl<T> Clone for MultiBlockFile<T> {
 	}
 }
 
-impl<T> From<&MultiBlockFile<T>> for PbNode {
-	fn from(mbf: &MultiBlockFile<T>) -> Self {
-		let links: Vec<PbLink> = mbf.links.iter().map(PbLink::from).collect();
-		let blocksizes = mbf.blocksizes().collect::<Vec<u64>>();
-		let data = Bytes::from(proto::Data::new_file(blocksizes).encode_to_vec());
-		proto::new_pb_node(links, data)
-	}
-}
-
 impl<T> ContextLen for MultiBlockFile<T> {
 	fn data_len(&self) -> u64 {
 		self.blocksizes().sum()
@@ -63,5 +54,27 @@ impl<T> ContextLen for MultiBlockFile<T> {
 		}
 
 		self.dag_len_cache.load(Relaxed)
+	}
+
+	fn invalidate(&mut self) {
+		self.dag_len_cache.store(0, Relaxed);
+	}
+
+	fn was_invalidated(&self) -> bool {
+		self.dag_len_cache.load(Relaxed) == 0
+	}
+}
+
+// Ipld & CID related
+// ===========================================================================
+
+impl<T> DagPbCidDefaultBuilder for MultiBlockFile<T> {}
+
+impl<T> From<&MultiBlockFile<T>> for PbNode {
+	fn from(mbf: &MultiBlockFile<T>) -> Self {
+		let links: Vec<PbLink> = mbf.links.iter().map(PbLink::from).collect();
+		let blocksizes = mbf.blocksizes().collect::<Vec<u64>>();
+		let data = Bytes::from(proto::Data::new_file(blocksizes).encode_to_vec());
+		proto::new_pb_node(links, data)
 	}
 }

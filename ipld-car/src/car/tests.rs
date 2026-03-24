@@ -22,7 +22,7 @@ fn load_and_check_cids(name: &str) -> Result<()> {
 	let roots = car.root_cids()?.iter().map(Cid::to_string).collect::<Vec<_>>();
 	assert_eq!(exp_roots, roots);
 
-	let block_ids = car.arena.iter().map(|block| block.cid().unwrap().to_string()).collect::<Vec<_>>();
+	let block_ids = car.arena.iter().map(|block| block.cid.unwrap().to_string()).collect::<Vec<_>>();
 	assert_eq!(exp_block_ids, block_ids);
 
 	Ok(())
@@ -33,7 +33,7 @@ fn load_and_check_cids(name: &str) -> Result<()> {
 #[test_case("dir-with-files.car")]
 #[test_case("dir-with-percent-encoded-filename.car" => ignore["WIP"] )]
 fn load_and_save(car_path: &str) -> Result<()> {
-	let car = ContentAddressableArchive::load(test_file(car_path))?;
+	let mut car = ContentAddressableArchive::load(test_file(car_path))?;
 
 	let mut saved_car_file = BufWriter::new(tempfile()?);
 	car.write(&mut saved_car_file)?;

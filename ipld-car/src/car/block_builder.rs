@@ -1,10 +1,10 @@
 use crate::{
 	car::{block_content::BlockContent, Block},
 	config::{ChunkPolicy, CidCodec, Config, DAGLayout, HasherAndWrite, LeafPolicy},
-	dag_pb::{BuildCid, DagPb, Link, MultiBlockFile, SBFContent, SingleBlockFile},
+	dag_pb::{DagPb, Link, MultiBlockFile, SBFContent, SingleBlockFile},
 	ensure,
 	error::{Error, NotSupportedErr, Result},
-	BoundedReader, ContextLen,
+	BoundedReader, CIDBuilder, ContextLen,
 };
 
 use bytes::Bytes;
@@ -19,7 +19,7 @@ pub struct BlockBuilder<T> {
 
 impl<T: Read + Seek> BlockBuilder<T> {
 	pub fn new(reader: BoundedReader<T>, config: Config) -> Result<Self> {
-		let hasher = config.hasher().ok_or(NotSupportedErr::Hasher(config.hash_code))?;
+		let hasher = config.hasher()?;
 		Ok(Self { config, hasher, reader })
 	}
 
@@ -70,7 +70,7 @@ impl<T: Read + Seek> BlockBuilder<T> {
 		let mut links = chunk
 			.iter()
 			.map(|leaf| {
-				let cid = *leaf.cid().expect("CID was created .qed");
+				let cid = leaf.cid.expect("CID was created .qed");
 				Link::new(cid, leaf.dag_pb_len(), leaf.data_len(), None, None)
 			})
 			.collect::<Vec<_>>();
@@ -79,7 +79,7 @@ impl<T: Read + Seek> BlockBuilder<T> {
 		if !next_chunks.is_empty() {
 			let next_offset = links.iter().map(|l| l.cumulative_dag_size).sum();
 			let block = self.recursive_trickle_tree_from_leaves(max_children, next_offset, next_chunks)?;
-			let cid = *block.cid().expect("Block CID is generated .qed");
+			let cid = block.cid.expect("Block CID is generated .qed");
 			let link = Link::new(cid, block.dag_pb_len(), block.data_len(), None, None);
 			links.push(link)
 		}
@@ -87,7 +87,7 @@ impl<T: Read + Seek> BlockBuilder<T> {
 		let acc_link_size = links.iter().map(|l| l.cumulative_dag_size).sum::<u64>();
 		let sub_reader = self.reader.sub(offset..offset + acc_link_size).expect("Bounded sub range is valid .qed");
 		let mbf = MultiBlockFile::new(links, sub_reader);
-		let cid = mbf.build_cid(&self.config)?;
+		let cid = mbf.cid(&self.config)?;
 
 		Ok(Block::new(cid, DagPb::MultiBlockFile(mbf)))
 	}
@@ -172,7 +172,7 @@ impl<T: Read + Seek> BlockBuilder<T> {
 			self.hasher.reset();
 
 			let cid = Cid::new_v1(CidCodec::DagPb as u64, digest);
-			let leaf = Block::new(cid, BlockContent::DagPb(sbf.into()));
+			let leaf = Block::new(cid, BlockContent::DagPb(DagPb::SingleBlockFile(sbf)));
 			leaves.push(leaf);
 		}
 

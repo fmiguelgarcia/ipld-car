@@ -61,6 +61,8 @@ derive_more = { version = "2", default-features = false, features = [
 derivative = "2.2.0"
 derive-new = "0.7.0"
 num_enum = "0.7"
+strum = { version = "0.27", features = ["derive"] }
+
 
 # Extra containers
 either = "1"

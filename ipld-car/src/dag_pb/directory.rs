@@ -1,4 +1,4 @@
-use crate::{dag_pb::Link, proto, ContextLen};
+use crate::{cid_builder::DagPbCidDefaultBuilder, dag_pb::Link, proto, ContextLen};
 
 use bytes::Bytes;
 use libipld::pb::PbNode;
@@ -33,18 +33,6 @@ impl Clone for Directory {
 	}
 }
 
-impl From<&Directory> for PbNode {
-	fn from(dir: &Directory) -> Self {
-		let pb_links = dir
-			.entries
-			.iter()
-			.map(|(name, l)| proto::new_pb_link(l.cid, name.clone(), l.cumulative_dag_size))
-			.collect();
-		let pb_data = Bytes::from(proto::Data::new_directory().encode_to_vec());
-		proto::new_pb_node(pb_links, pb_data)
-	}
-}
-
 impl From<Entries> for Directory {
 	fn from(entries: Entries) -> Self {
 		Self { dag_len_cache: AtomicU64::new(0), entries }
@@ -63,5 +51,30 @@ impl ContextLen for Directory {
 			self.dag_len_cache.store(pb_node_len, Relaxed);
 		}
 		self.dag_len_cache.load(Relaxed)
+	}
+
+	fn invalidate(&mut self) {
+		self.dag_len_cache.store(0, Relaxed);
+	}
+
+	fn was_invalidated(&self) -> bool {
+		self.dag_len_cache.load(Relaxed) == 0
+	}
+}
+
+// Ipld & CID related
+// ===========================================================================
+
+impl DagPbCidDefaultBuilder for Directory {}
+
+impl From<&Directory> for PbNode {
+	fn from(dir: &Directory) -> Self {
+		let pb_links = dir
+			.entries
+			.iter()
+			.map(|(name, l)| proto::new_pb_link(l.cid, name.clone(), l.cumulative_dag_size))
+			.collect();
+		let pb_data = Bytes::from(proto::Data::new_directory().encode_to_vec());
+		proto::new_pb_node(pb_links, pb_data)
 	}
 }
