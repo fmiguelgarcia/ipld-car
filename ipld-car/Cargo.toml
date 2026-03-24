@@ -64,9 +64,9 @@ anyhow.workspace = true
 criterion.workspace = true
 
 [features]
-default = ["std"]
+default = [ "std" ]
 jumbo-chunks = []
 test_helpers = []
-cli = ["dep:clap"]
-vfs = ["dep:vfs"]
-std = ["bytes/std", "dep:ciborium", "derive_builder/std", "prost/std", "vfs"]
+cli = [ "dep:clap" ]
+vfs = [ "dep:vfs" ]
+std = [ "bytes/std", "dep:ciborium", "derive_builder/std", "prost/std", "vfs" ]

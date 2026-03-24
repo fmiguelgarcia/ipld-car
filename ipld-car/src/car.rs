@@ -339,19 +339,18 @@ impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
 	///
 	/// # BUG
 	///
-	/// - We have to review if the order of closing `DeferedAppendFile` could invalidate this
-	/// strategy.
+	/// - We have to review if the order of closing `DeferedAppendFile` could invalidate this strategy.
 	fn rebuild_invalids(&mut self) -> Result<()> {
 		let mut invalidated_ids = self
 			.arena
 			.iter()
 			.enumerate()
-			.filter_map(|(id, block)| block.was_invalidated().then_some(id))
+			.filter_map(|(id, block)| block.cid.is_none().then_some(id))
 			.collect::<VecDeque<_>>();
 
 		while let Some(id) = invalidated_ids.pop_back() {
 			if let Some(block) = self.arena.get_mut(id) {
-				if block.was_invalidated() {
+				if block.cid.is_none() {
 					block.cid = block.cid(&self.config)?.into();
 					let _ = block;
 

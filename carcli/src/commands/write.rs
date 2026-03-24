@@ -21,7 +21,7 @@ pub struct SubCmdWrite {
 
 impl SubCmdWrite {
 	pub fn run(&self) -> Result<()> {
-		let fs = CarFs::from(ContentAddressableArchive::new(self.config.clone())?);
+		let fs = CarFs::from(ContentAddressableArchive::new(self.config)?);
 
 		for entry in &self.entries {
 			let (dest, src) =

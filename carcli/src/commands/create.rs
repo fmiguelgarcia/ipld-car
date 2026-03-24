@@ -23,8 +23,7 @@ pub struct SubCmdCreate {
 
 impl SubCmdCreate {
 	pub fn run(&self) -> Result<()> {
-		let car = ContentAddressableArchive::new(self.config.clone())?;
-		let fs: CarFs<File> = car.into();
+		let fs = CarFs::from(ContentAddressableArchive::new(self.config)?);
 
 		let source =
 			self.source.canonicalize().map_err(|e| anyhow!("Cannot access `{}`: {e}", self.source.display()))?;

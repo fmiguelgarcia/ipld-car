@@ -5,13 +5,15 @@
 //! output normalises the User/Group columns — which reflect the OS owner of the
 //! `.car` file — so that the expected files are portable across machines.
 use handlebars::Handlebars;
-use ipld_car::test_helpers::test_fixtures_path;
+use ipld_car::{car::fs::CarFs, test_helpers::test_fixtures_path, ContentAddressableArchive};
 use std::{
 	collections::BTreeMap,
-	fs::{metadata, Metadata},
+	fs::{metadata, File, Metadata},
 	path::Path,
 	process::Command,
 };
+use tempfile::tempdir;
+use vfs::{FileSystem, VfsFileType};
 
 use test_case::test_case;
 
@@ -120,4 +122,100 @@ fn ls_test(car_file: &str, cmd: &str) {
 	let expected_content = output_test_file(car_file, "ls.output");
 	let output = run_cli(car_file, cmd);
 	assert_eq!(output, expected_content);
+}
+
+// ── create round-trip test ────────────────────────────────────────────────────
+
+/// Recursively extracts all files and directories from `car_path` (VFS) into `dest` on disk.
+fn extract_car_to_dir(fs: &CarFs<File>, car_path: &str, dest: &Path) -> anyhow::Result<()> {
+	for name in fs.read_dir(car_path).map_err(|e| anyhow::anyhow!("{e}"))? {
+		let child_car_path = if car_path == "/" { format!("/{name}") } else { format!("{car_path}/{name}") };
+		let child_dest = dest.join(&name);
+		let meta = fs.metadata(&child_car_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+		match meta.file_type {
+			VfsFileType::Directory => {
+				std::fs::create_dir_all(&child_dest)?;
+				extract_car_to_dir(fs, &child_car_path, &child_dest)?;
+			},
+			VfsFileType::File => {
+				let mut reader = fs.open_file(&child_car_path).map_err(|e| anyhow::anyhow!("{e}"))?;
+				std::io::copy(&mut reader, &mut File::create(&child_dest)?)?;
+			},
+		}
+	}
+	Ok(())
+}
+
+/// Replaces ISO 8601 timestamps (`YYYY-MM-DDTHH:MM:SSZ`) with `<DATE>` so that
+/// two `ls -T` outputs from different CAR files can be compared structurally.
+fn normalize_date(s: &str) -> String {
+	let b = s.as_bytes();
+	let mut out = String::with_capacity(s.len());
+	let mut i = 0;
+	while i < b.len() {
+		// Match YYYY-MM-DDTHH:MM:SSZ (20 bytes)
+		if i + 20 <= b.len() &&
+			b[i..i + 4].iter().all(u8::is_ascii_digit) &&
+			b[i + 4] == b'-' &&
+			b[i + 5..i + 7].iter().all(u8::is_ascii_digit) &&
+			b[i + 7] == b'-' &&
+			b[i + 8..i + 10].iter().all(u8::is_ascii_digit) &&
+			b[i + 10] == b'T' &&
+			b[i + 11..i + 13].iter().all(u8::is_ascii_digit) &&
+			b[i + 13] == b':' &&
+			b[i + 14..i + 16].iter().all(u8::is_ascii_digit) &&
+			b[i + 16] == b':' &&
+			b[i + 17..i + 19].iter().all(u8::is_ascii_digit) &&
+			b[i + 19] == b'Z'
+		{
+			out.push_str("<DATE>");
+			i += 20;
+		} else {
+			out.push(b[i] as char);
+			i += 1;
+		}
+	}
+	out
+}
+
+/// Runs `carcli ls -T -B <car_path>` and returns stdout.
+fn ls_tree_bytes(car_path: &Path) -> String {
+	let out = Command::new(env!("CARGO_BIN_EXE_carcli"))
+		.args(["ls", "-T", "-B", car_path.to_str().unwrap()])
+		.output()
+		.expect("failed to run carcli ls");
+	String::from_utf8(out.stdout).expect("stdout is not valid UTF-8")
+}
+
+/// Extracts `subdir-with-two-single-block-files.car` to a temp directory, re-creates it
+/// with `carcli create`, then asserts that `ls -T -B` on both CARs produces the same
+/// structure (normalising the Date Modified column, which reflects the CAR file's mtime).
+#[ignore = "To be fixed"]
+#[test]
+fn create_roundtrip() -> anyhow::Result<()> {
+	let fixture = "subdir-with-two-single-block-files.car";
+	let car_path = test_fixtures_path().join(fixture);
+
+	// 1. Extract the fixture CAR to a temporary directory.
+	let tmp = tempdir()?;
+	{
+		let car = ContentAddressableArchive::load(File::open(&car_path)?)?;
+		let fs = CarFs::from(car);
+		extract_car_to_dir(&fs, "/", tmp.path())?;
+	}
+
+	// 2. Re-create a new CAR from the extracted `subdir/`.
+	let output_car = tmp.path().join("recreated.car");
+	let source = tmp.path().join("subdir");
+	let status = Command::new(env!("CARGO_BIN_EXE_carcli"))
+		.args(["create", output_car.to_str().unwrap(), source.to_str().unwrap()])
+		.status()?;
+	assert!(status.success(), "carcli create failed");
+
+	// 3. Compare `ls -T -B` output, ignoring Date Modified.
+	let original_ls = ls_tree_bytes(&car_path);
+	let created_ls = ls_tree_bytes(&output_car);
+	assert_eq!(normalize_date(&original_ls), normalize_date(&created_ls));
+
+	Ok(())
 }

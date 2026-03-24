@@ -18,8 +18,7 @@ impl SubCmdCat {
 	/// Reads the file at `self.path`, and streams it to stdout.
 	pub fn run(&self) -> Result<()> {
 		let file = File::open(&self.file)?;
-		let car = ContentAddressableArchive::load(file)?;
-		let fs: CarFs<File> = car.into();
+		let fs = CarFs::from(ContentAddressableArchive::load(file)?);
 
 		let mut reader = fs.open_file(&self.path).map_err(|e| anyhow!("Cannot open file: {e}"))?;
 		let mut stdout = std::io::stdout().lock();

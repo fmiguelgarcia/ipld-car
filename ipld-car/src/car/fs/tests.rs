@@ -16,11 +16,10 @@ use vfs::FileSystem;
 #[test_case("dir-with-files.car", "hello.txt", b"hello world\n".to_vec() )]
 // #[test_case("dir-with-files.car", "multiblock.txt", vec![] )]
 fn vfs_path_content(name: &str, path: &str, exp_content: Vec<u8>) -> Result<()> {
-	let car = ContentAddressableArchive::load(test_file(name))?;
-	let car_fs = CarFs::from(car);
+	let fs = CarFs::from(ContentAddressableArchive::load(test_file(name))?);
 
 	let mut content = Vec::new();
-	let mut file = car_fs.open_file(path)?;
+	let mut file = fs.open_file(path)?;
 	file.read_to_end(&mut content)?;
 	assert_eq!(content, exp_content);
 
@@ -54,10 +53,9 @@ where
 	I: IntoIterator<Item = S>,
 	String: From<S>,
 {
-	let car = ContentAddressableArchive::load(test_file(name))?;
-	let car_fs = CarFs::from(car);
+	let fs = CarFs::from(ContentAddressableArchive::load(test_file(name))?);
 
-	let dir_entries = car_fs.read_dir(dir_path)?.collect::<Vec<_>>();
+	let dir_entries = fs.read_dir(dir_path)?.collect::<Vec<_>>();
 	let exp_dir_entries = exp_dir_entries.into_iter().map(String::from).collect::<Vec<_>>();
 	assert_eq!(exp_dir_entries, dir_entries);
 
@@ -96,29 +94,17 @@ where
 	I2: IntoIterator<Item = S2>,
 	String: From<S2>,
 {
-	let car = ContentAddressableArchive::load(test_file(name))?;
-	let car_fs = CarFs::from(car);
+	let fs = CarFs::from(ContentAddressableArchive::load(test_file(name))?);
 
 	for new_dir in new_dirs {
-		car_fs.create_dir(new_dir)?;
+		fs.create_dir(new_dir)?;
 	}
 
-	let dir_entries = car_fs.read_dir(dir_path)?.collect::<Vec<_>>();
+	let dir_entries = fs.read_dir(dir_path)?.collect::<Vec<_>>();
 	let exp_dir_entries = exp_dir_entries.into_iter().map(String::from).collect::<Vec<_>>();
 	assert_eq!(exp_dir_entries, dir_entries);
 
 	Ok(())
-}
-
-#[ignore = "Only to debug test case"]
-#[test]
-fn debug_vfs_create_dir() -> Result<()> {
-	let name = "dir-with-files.car";
-	let dir_path = "/";
-	let new_dirs = ["/a", "/a/b", "/a/b/c"];
-	let exp_dir_entries = ["a", "ascii-copy.txt", "ascii.txt", "hello.txt", "multiblock.txt"];
-
-	vfs_create_dir(name, dir_path, new_dirs, exp_dir_entries)
 }
 
 #[test_case( Config::default(), "bafybeiczsscdsbs7ffqz55asqdf3smv6klcw3gofszvwlyarci47bgf354"; "Default")]
