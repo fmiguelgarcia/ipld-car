@@ -206,7 +206,9 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 		let new_dir = Directory::default();
 		let new_dir_cid = new_dir.cid(&self.config)?;
 		let new_dir_pb_len = PbNode::from(&new_dir).into_bytes().len() as u64;
-		let new_dir_arena_id = self.arena.push(Block::new(new_dir_cid, DagPb::Dir(Directory::default())), parent_id);
+		let block = Block::new(new_dir_cid, DagPb::Dir(new_dir));
+		tracing::trace!(?block, parent_id, "Directory block added under parent");
+		let new_dir_arena_id = self.arena.push(block, parent_id);
 
 		// Insert a Link to the new directory in the parent and invalidate its CID.
 		let parent = self.arena.get_mut(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
@@ -278,7 +280,7 @@ impl<F: Read + Seek> ContentAddressableArchive<F> {
 			trace!(?block_def, "BlockDef loaded");
 			let block_reader = reader.sub(block_def.range.clone())?;
 			let cid_codec = block_def.cid.codec();
-			let codec = CidCodec::try_from(cid_codec).map_err(|_| CidErr::CodecNotSupported(cid_codec))?;
+			let codec = CidCodec::from_repr(cid_codec).ok_or(CidErr::CodecNotSupported(cid_codec))?;
 			let _id = match codec {
 				CidCodec::Raw => {
 					let block = Block::new(block_def.cid, block_reader);
@@ -336,10 +338,8 @@ impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
 
 	/// Recomputes CIDs for all directory blocks whose CID has been invalidated (set to `None`),
 	/// processing from highest arena index to lowest so children are finalized before parents.
-	///
-	/// # BUG
-	///
-	/// - We have to review if the order of closing `DeferedAppendFile` could invalidate this strategy.
+	/// After recomputing a block's CID, updates the stale `link.cid` in every parent directory
+	/// entry that points to that block (identified via `link.arena_id`).
 	fn rebuild_invalids(&mut self) -> Result<()> {
 		let mut invalidated_ids = self
 			.arena
@@ -351,22 +351,28 @@ impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
 		while let Some(id) = invalidated_ids.pop_back() {
 			if let Some(block) = self.arena.get_mut(id) {
 				if block.cid.is_none() {
-					block.cid = block.cid(&self.config)?.into();
+					let new_cid = block.cid(&self.config)?;
+					block.cid = Some(new_cid);
 					let _ = block;
 
-					// Invalidate ancestors
-					loop {
-						let parent_ids = self.arena.parent_of(id);
-						if parent_ids.is_empty() {
-							break;
-						}
-
-						// Invalidate any parent of this
-						for parent_id in parent_ids {
-							if !invalidated_ids.contains(&parent_id) {
-								if let Some(parent_block) = self.arena.get_mut(parent_id) {
-									parent_block.invalidate();
+					// Update parents:
+					// - link.cid of updated entry should be updated too.
+					// - Mark this parent block as invalid, so we could rebuild it later.
+					let parent_ids = self.arena.parent_of(id);
+					for parent_id in parent_ids {
+						if let Some(parent_block) = self.arena.get_mut(parent_id) {
+							if let BlockContent::DagPb(DagPb::Dir(dir)) = &mut parent_block.content {
+								// DEV: Could we have more that one entry pointing to updated block?
+								// Maybe because we could create `symbolic links` to it.
+								for link in dir.mut_entries().values_mut() {
+									if link.arena_id == Some(id) {
+										link.cid = new_cid;
+									}
 								}
+							}
+
+							parent_block.invalidate();
+							if !invalidated_ids.contains(&parent_id) {
 								invalidated_ids.push_front(parent_id);
 							}
 						}

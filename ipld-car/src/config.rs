@@ -9,8 +9,8 @@ use libipld::{
 	},
 	Cid,
 };
-use num_enum::TryFromPrimitive;
 use std::io::Write;
+use strum::FromRepr;
 
 mod chunck_policy;
 pub use chunck_policy::{ChunkPolicy, WellKnownChunkSize};
@@ -79,7 +79,8 @@ impl TryFrom<&Cid> for Config {
 	type Error = Error;
 
 	fn try_from(cid: &Cid) -> Result<Self, Self::Error> {
-		let cid_codec = CidCodec::try_from(cid.codec()).map_err(|_| CidErr::CodecNotSupported(cid.codec()))?;
+		let cid_codec_repr = cid.codec();
+		let cid_codec = CidCodec::from_repr(cid_codec_repr).ok_or(CidErr::CodecNotSupported(cid_codec_repr))?;
 		let hash_codec = multihash::Code::try_from(cid.hash().code())?;
 
 		ConfigBuilder::default()
@@ -92,7 +93,7 @@ impl TryFrom<&Cid> for Config {
 
 /// CID codec identifiers for IPLD content encoding.
 #[cfg_attr(feature = "std", derive(Debug))]
-#[derive(Default, Clone, Copy, PartialEq, Eq, TryFromPrimitive)]
+#[derive(Default, Clone, Copy, PartialEq, Eq, FromRepr)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[repr(u64)]
 pub enum CidCodec {

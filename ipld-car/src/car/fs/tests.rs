@@ -3,7 +3,7 @@ use crate::{
 	config::{Config, ConfigBuilder, LeafPolicy},
 	dag_pb::DagPb,
 	fail,
-	test_helpers::test_file,
+	test_helpers::test_fixtures_file,
 	BoundedReader,
 };
 
@@ -14,9 +14,10 @@ use test_case::test_case;
 use vfs::FileSystem;
 
 #[test_case("dir-with-files.car", "hello.txt", b"hello world\n".to_vec() )]
+#[test_case("dir-with-files.car", "ascii.txt", b"hello application/vnd.ipld.car\n".to_vec() )]
 // #[test_case("dir-with-files.car", "multiblock.txt", vec![] )]
 fn vfs_path_content(name: &str, path: &str, exp_content: Vec<u8>) -> Result<()> {
-	let fs = CarFs::from(ContentAddressableArchive::load(test_file(name))?);
+	let fs = CarFs::from(ContentAddressableArchive::load(test_fixtures_file(name))?);
 
 	let mut content = Vec::new();
 	let mut file = fs.open_file(path)?;
@@ -53,7 +54,7 @@ where
 	I: IntoIterator<Item = S>,
 	String: From<S>,
 {
-	let fs = CarFs::from(ContentAddressableArchive::load(test_file(name))?);
+	let fs = CarFs::from(ContentAddressableArchive::load(test_fixtures_file(name))?);
 
 	let dir_entries = fs.read_dir(dir_path)?.collect::<Vec<_>>();
 	let exp_dir_entries = exp_dir_entries.into_iter().map(String::from).collect::<Vec<_>>();
@@ -69,7 +70,7 @@ where
 	String: From<S>,
 {
 	let mut arena = Default::default();
-	let content = BoundedReader::from_reader(test_file(format!("{name}.dag-pb")))?;
+	let content = BoundedReader::from_reader(test_fixtures_file(format!("{name}.dag-pb")))?;
 	let cid = name.parse::<Cid>()?;
 	let id = DagPb::load(&mut arena, cid, content)?;
 	let BlockContent::DagPb(ref dag_pb) = arena.get(id).unwrap().content else { fail!(anyhow!("It is not a DagPb")) };
@@ -94,7 +95,7 @@ where
 	I2: IntoIterator<Item = S2>,
 	String: From<S2>,
 {
-	let fs = CarFs::from(ContentAddressableArchive::load(test_file(name))?);
+	let fs = CarFs::from(ContentAddressableArchive::load(test_fixtures_file(name))?);
 
 	for new_dir in new_dirs {
 		fs.create_dir(new_dir)?;

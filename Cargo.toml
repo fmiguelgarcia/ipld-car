@@ -60,7 +60,6 @@ derive_more = { version = "2", default-features = false, features = [
 ] }
 derivative = "2.2.0"
 derive-new = "0.7.0"
-num_enum = "0.7"
 strum = { version = "0.27", features = ["derive"] }
 
 
@@ -70,12 +69,10 @@ bytes = { version = "1.8.0", default-features = false }
 
 # Units
 nbytes = "0.1"
-humansize = "2.1.3"
 unit-prefix = "0.5.2"
 
 # Terminal
 uutils_term_grid = "0.8.0"
-terminal_size = "0.4.3"
 
 # Serde 
 serde = "1"
@@ -103,16 +100,11 @@ test-case = "3.3.1"
 test-log = { version = "0.2.16", features = ["trace"] }
 pretty_env_logger = "0.5"
 handlebars = "6.4"
+regex = "1"
 
 # ProtoBuf 
 prost = { version = "0.13.3", default-features = false, features = ["derive"] }
 quick-protobuf = { version = "0.8.1", default-features = false }
-prost-build = "0.13.3"
-
-# Generalu
-rand = "0.8"
-uom = { version = "0.37.0", features = ["usize", "si"] }
-
 
 # [[bench]]
 # name = "fs_reader"

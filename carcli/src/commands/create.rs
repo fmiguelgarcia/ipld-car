@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use clap::Args;
 use std::{
 	fs::File,
-	io::BufWriter,
+	io::{BufWriter, Write},
 	path::{Path, PathBuf},
 };
 use vfs::FileSystem;
@@ -32,9 +32,10 @@ impl SubCmdCreate {
 		add_path(&fs, &source, parent)?;
 
 		let mut car = fs.into_inner().ok_or_else(|| anyhow!("CAR is still referenced"))?;
-		let out_file = File::create(&self.output)?;
-		let mut writer = BufWriter::new(out_file);
+		let mut writer = BufWriter::new(File::create(&self.output)?);
 		let bytes = car.write(&mut writer)?;
+		writer.flush()?;
+		drop(writer);
 		println!("Written {} bytes to {}", bytes, self.output.display());
 
 		Ok(())
@@ -84,5 +85,28 @@ fn dest_path(path: &Path, root: &Path) -> Result<String> {
 		Ok(s.to_string())
 	} else {
 		Ok(format!("/{s}"))
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::commands::ls::SubCmdLs;
+
+	#[test]
+	fn debug_create_roundtrip() -> anyhow::Result<()> {
+		let _ = pretty_env_logger::try_init();
+		const OUTPUT: &str = "/tmp/roundtrip.car";
+
+		let cmd_create = SubCmdCreate {
+			output: OUTPUT.into(),
+			source: "/home/miguel/projects/dmious/ipfs-unixfs/tmp/subdir".into(),
+			config: Config::default(),
+		};
+		cmd_create.run()?;
+
+		// Load
+		let cmd_ls = SubCmdLs { file: OUTPUT.into(), path: "/".into(), tree: true, binary: false, bytes: true };
+		cmd_ls.run()
 	}
 }

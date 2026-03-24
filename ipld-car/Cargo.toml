@@ -23,11 +23,9 @@ derive_more = { workspace = true, features = [
 ] }
 derivative.workspace = true
 derive-new.workspace = true
-num_enum.workspace = true
 strum.workspace = true
 
 # Extra containers
-either.workspace = true
 bytes = { workspace = true, features = ["serde"] }
 
 # Units 

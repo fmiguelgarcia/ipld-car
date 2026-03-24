@@ -15,14 +15,11 @@ path = "src/main.rs"
 [dependencies]
 ipld-car = { workspace = true, features = ["std", "vfs", "cli"] }
 
-libipld = { workspace = true, features = ["dag-pb", "dag-json"] }
-
 clap.workspace = true
 anyhow.workspace = true
 vfs.workspace = true
 unit-prefix.workspace = true
 uutils_term_grid.workspace = true
-terminal_size.workspace = true
 users.workspace = true
 time.workspace = true
 
@@ -34,3 +31,4 @@ test-log.workspace = true
 pretty_env_logger.workspace = true
 handlebars.workspace = true
 tempfile.workspace = true
+regex.workspace = true

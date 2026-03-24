@@ -124,7 +124,7 @@ fn ls_test(car_file: &str, cmd: &str) {
 	assert_eq!(output, expected_content);
 }
 
-// ── create round-trip test ────────────────────────────────────────────────────
+// ── create extract and re-pack  test ────────────────────────────────────────────────────
 
 /// Recursively extracts all files and directories from `car_path` (VFS) into `dest` on disk.
 fn extract_car_to_dir(fs: &CarFs<File>, car_path: &str, dest: &Path) -> anyhow::Result<()> {
@@ -148,34 +148,9 @@ fn extract_car_to_dir(fs: &CarFs<File>, car_path: &str, dest: &Path) -> anyhow::
 
 /// Replaces ISO 8601 timestamps (`YYYY-MM-DDTHH:MM:SSZ`) with `<DATE>` so that
 /// two `ls -T` outputs from different CAR files can be compared structurally.
-fn normalize_date(s: &str) -> String {
-	let b = s.as_bytes();
-	let mut out = String::with_capacity(s.len());
-	let mut i = 0;
-	while i < b.len() {
-		// Match YYYY-MM-DDTHH:MM:SSZ (20 bytes)
-		if i + 20 <= b.len() &&
-			b[i..i + 4].iter().all(u8::is_ascii_digit) &&
-			b[i + 4] == b'-' &&
-			b[i + 5..i + 7].iter().all(u8::is_ascii_digit) &&
-			b[i + 7] == b'-' &&
-			b[i + 8..i + 10].iter().all(u8::is_ascii_digit) &&
-			b[i + 10] == b'T' &&
-			b[i + 11..i + 13].iter().all(u8::is_ascii_digit) &&
-			b[i + 13] == b':' &&
-			b[i + 14..i + 16].iter().all(u8::is_ascii_digit) &&
-			b[i + 16] == b':' &&
-			b[i + 17..i + 19].iter().all(u8::is_ascii_digit) &&
-			b[i + 19] == b'Z'
-		{
-			out.push_str("<DATE>");
-			i += 20;
-		} else {
-			out.push(b[i] as char);
-			i += 1;
-		}
-	}
-	out
+fn remove_dates(s: &str) -> String {
+	let re = regex::Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z").unwrap();
+	re.replace_all(s, "<DATE>").into()
 }
 
 /// Runs `carcli ls -T -B <car_path>` and returns stdout.
@@ -187,20 +162,16 @@ fn ls_tree_bytes(car_path: &Path) -> String {
 	String::from_utf8(out.stdout).expect("stdout is not valid UTF-8")
 }
 
-/// Extracts `subdir-with-two-single-block-files.car` to a temp directory, re-creates it
-/// with `carcli create`, then asserts that `ls -T -B` on both CARs produces the same
-/// structure (normalising the Date Modified column, which reflects the CAR file's mtime).
-#[ignore = "To be fixed"]
-#[test]
-fn create_roundtrip() -> anyhow::Result<()> {
-	let fixture = "subdir-with-two-single-block-files.car";
-	let car_path = test_fixtures_path().join(fixture);
+/// Extracts `car_file_name` to a temp directory, re-creates it
+/// with `carcli create`, then asserts that `ls -T -B` on both CARs produces the same output
+#[test_case("subdir-with-two-single-block-files.car")]
+fn extract_and_repack(car_file_name: &str) -> anyhow::Result<()> {
+	let tmp = tempdir()?;
+	let car_file_path = test_fixtures_path().join(car_file_name);
 
 	// 1. Extract the fixture CAR to a temporary directory.
-	let tmp = tempdir()?;
 	{
-		let car = ContentAddressableArchive::load(File::open(&car_path)?)?;
-		let fs = CarFs::from(car);
+		let fs = CarFs::from(ContentAddressableArchive::load(File::open(&car_file_path)?)?);
 		extract_car_to_dir(&fs, "/", tmp.path())?;
 	}
 
@@ -213,9 +184,9 @@ fn create_roundtrip() -> anyhow::Result<()> {
 	assert!(status.success(), "carcli create failed");
 
 	// 3. Compare `ls -T -B` output, ignoring Date Modified.
-	let original_ls = ls_tree_bytes(&car_path);
+	let original_ls = ls_tree_bytes(&car_file_path);
 	let created_ls = ls_tree_bytes(&output_car);
-	assert_eq!(normalize_date(&original_ls), normalize_date(&created_ls));
+	assert_eq!(remove_dates(&original_ls), remove_dates(&created_ls));
 
 	Ok(())
 }
