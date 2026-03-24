@@ -96,7 +96,7 @@ impl From<Error> for VfsError {
 
 impl From<Infallible> for Error {
 	fn from(_: Infallible) -> Self {
-		panic!("Infallible error");
+		unreachable!("Infallible error");
 	}
 }
 

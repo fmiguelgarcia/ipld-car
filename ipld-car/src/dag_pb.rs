@@ -10,6 +10,7 @@ use crate::{
 };
 
 use bytes::{BufMut, Bytes, BytesMut};
+use derivative::Derivative;
 use libipld::{
 	pb::{PbLink, PbNode},
 	Cid,
@@ -37,23 +38,13 @@ pub use link::Link;
 const BUF_LIMIT: usize = bytes!(2; MiB);
 const BUF_CAPS: &[usize] = &[bytes!(4; KiB), bytes!(16; KiB), bytes!(128; KiB), bytes!(512; KiB), bytes!(1; MiB)];
 
-#[derive(derive_more::Debug)]
+#[derive(derive_more::Debug, Derivative)]
+#[derivative(Clone(bound = ""))]
 pub enum DagPb<T> {
 	Dir(Directory),
 	SingleBlockFile(SingleBlockFile<T>),
 	MultiBlockFile(MultiBlockFile<T>),
 	Symlink(Symlink),
-}
-
-impl<T> Clone for DagPb<T> {
-	fn clone(&self) -> Self {
-		match self {
-			Self::SingleBlockFile(sbf) => Self::SingleBlockFile(sbf.clone()),
-			Self::MultiBlockFile(mbf) => Self::MultiBlockFile(mbf.clone()),
-			Self::Dir(dir) => Self::Dir(dir.clone()),
-			Self::Symlink(sym) => Self::Symlink(sym.clone()),
-		}
-	}
 }
 
 impl<T> ContextLen for DagPb<T> {
@@ -172,25 +163,6 @@ fn load_file<T: Read + Seek>(
 	tracing::debug!(?block, "DagPb file loaded");
 	let id = arena.push(block, None);
 
-	/*
-	// Add children recursivelly.
-	let mut acc_link_size = 0u64;
-	for (link, _blocksize) in links.into_iter().zip(unixfs.blocksizes) {
-		let link_cumulative_dag_size = link.cumulative_dag_size.unwrap_or_default();
-		let new_acc_link_size =
-			acc_link_size.checked_add(link_cumulative_dag_size).ok_or(UnixFsErr::LinkSizeOverflow)?;
-		let link_data = data.sub(acc_link_size..new_acc_link_size)?;
-		acc_link_size = new_acc_link_size;
-
-		let cid_codec = link.cid.codec();
-		let codec = CidCodec::try_from(cid_codec).map_err(|_| CidErr::CodecNotSupported(cid_codec))?;
-		let _id = match codec {
-			CidCodec::Raw => single_block_file(arena, link.cid, link_data)?,
-			CidCodec::DagPb => DagPb::load(arena, link.cid, link_data)?,
-			_ => fail!(CidErr::CodecNotSupported(cid_codec)),
-		};
-	}*/
-
 	Ok(id)
 }
 
@@ -211,21 +183,6 @@ fn single_block_file<T: Read + Seek>(
 	tracing::debug!(?block, "DagPb single block loaded");
 	Ok(arena.push(block, None))
 }
-
-/*
-/// Computes the DagPb CID for a directory with the given named links, using the hash
-/// algorithm and codec defined in `config`.
-pub(crate) fn dir_cid(dir: &Directory, config: &Config) -> DagPbResult<Cid> {
-	use libipld::multihash::MultihashDigest as _;
-	use std::io::Read as _;
-
-	let ReaderWithLen { mut reader, .. } = directory_conent_writer(dir)?;
-	let mut buf = Vec::new();
-	reader.read_to_end(&mut buf)?;
-	let digest = config.hash_code.digest(&buf);
-	Ok(Cid::new_v1(config.cid_codec as u64, digest))
-}
-*/
 
 fn load_directory<T: Read + Seek>(
 	arena: &mut Arena<Block<T>>,
@@ -322,28 +279,3 @@ impl<T: Read + Seek> CIDBuilder for DagPb<T> {
 		}
 	}
 }
-
-// Utility structs
-// ===========================================================
-
-/*
-pub trait BuildCid {
-	fn build_cid(&self, config: &Config) -> crate::error::Result<Cid>;
-}
-
-impl<T> BuildCid for T
-where
-	PbNode: for<'a> From<&'a T>,
-{
-	fn build_cid(&self, config: &Config) -> crate::error::Result<Cid> {
-		let mut hasher = config.hasher()?;
-		let pb_node = PbNode::from(self).into_bytes();
-		hasher.update(&pb_node);
-		drop(pb_node);
-
-		let digest = config.hash_code.wrap(hasher.finalize())?;
-		let cid = Cid::new_v1(CidCodec::DagPb as u64, digest);
-		Ok(cid)
-	}
-}
-*/

@@ -31,10 +31,4 @@ impl BlockDef {
 		let range = start..cid_start.saturating_add(section_len);
 		Ok(Some(Self { cid, range }))
 	}
-
-	/*
-	pub fn len(&self) -> u64 {
-		self.range.end.saturating_sub(self.range.start)
-	}
-	*/
 }

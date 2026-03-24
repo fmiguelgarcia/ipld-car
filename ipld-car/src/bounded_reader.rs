@@ -203,6 +203,7 @@ impl<T> BoundedIndex<T> for Range<u64> {
 		let clamped_start = min(clamped_start, clamped_end);
 
 		let reader = Arc::clone(&bounded.reader);
+		// SAFETY: Boundaries are clamped some lines before.
 		unsafe { BoundedReader::new_unchecked(reader, clamped_start..clamped_end) }
 	}
 }

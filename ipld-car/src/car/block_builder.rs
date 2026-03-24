@@ -11,6 +11,10 @@ use bytes::Bytes;
 use libipld::{multihash::MultihashDigest, pb::PbNode, Cid};
 use std::io::{copy, Read, Seek};
 
+/// Creates blocks based on the given configuration.
+///
+/// # TODO
+/// - Empty file is failing.
 pub struct BlockBuilder<T> {
 	config: Config,
 	hasher: Box<dyn HasherAndWrite>,
@@ -44,8 +48,8 @@ impl<T: Read + Seek> BlockBuilder<T> {
 
 	fn tree_from_leaves(&mut self, leaves: Vec<Block<T>>) -> Result<Block<T>> {
 		match self.config.layout {
-			DAGLayout::Balanced(..) | DAGLayout::Flat => self.balanced_tree_from_leaves(leaves),
-			DAGLayout::Trickle(..) => self.trickle_tree_from_leaves(leaves),
+			DAGLayout::Balanced(..) => self.balanced_tree_from_leaves(leaves),
+			DAGLayout::Trickle(..) | DAGLayout::Flat => self.trickle_tree_from_leaves(leaves),
 		}
 	}
 
@@ -91,25 +95,6 @@ impl<T: Read + Seek> BlockBuilder<T> {
 
 		Ok(Block::new(cid, DagPb::MultiBlockFile(mbf)))
 	}
-
-	/*
-	fn build_non_leaf_block(&mut self, offset: u64, links: Vec<Link>) -> Block<T> {
-
-		let pb_links = links.iter().map(|l| PbLink::from(l)).collect();
-		let blocksizes = links.iter().map(|l| l.cumulative_dag_size.unwrap_or_default()).collect::<Vec<_>>();
-		let filesize = blocksizes.iter().sum::<u64>();
-		let data = Bytes::from(proto::Data::new_file(blocksizes).encode_to_vec());
-		let pb_node = proto::new_pb_node(pb_links, data).into_bytes();
-
-		self.hasher.reset();
-		self.hasher.update(&*pb_node);
-		let digest = self.config.hash_code.wrap(self.hasher.finalize()).expect("Digest is valid .qed");
-		let cid = Cid::new_v1(CidCodec::DagPb as u64, digest);
-
-		let sub_reader = self.reader.sub(offset..offset + filesize).expect("Sub reader's range is valid .qed");
-		Block::new(cid, BlockContent::DagPb(DagPb::MultiBlockFile(links, sub_reader)))
-	}
-	*/
 
 	// Build leaves nodes
 	// =========================================================================

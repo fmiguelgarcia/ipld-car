@@ -325,10 +325,7 @@ impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
 		// Write root entries.
 		let mut acc_block_written = 0u64;
 		for block in self.arena.iter() {
-			let block_written = block
-				.write(&self.arena, writer, &self.config)?
-				.checked_add(acc_block_written)
-				.ok_or(Error::FileTooLarge)?;
+			let block_written = block.write(writer)?.checked_add(acc_block_written).ok_or(Error::FileTooLarge)?;
 			acc_block_written = acc_block_written.checked_add(block_written).ok_or(Error::FileTooLarge)?;
 			debug!(?block, acc_block_written, "Block written")
 		}

@@ -15,7 +15,7 @@ use vfs::FileSystem;
 
 #[test_case("dir-with-files.car", "hello.txt", b"hello world\n".to_vec() )]
 #[test_case("dir-with-files.car", "ascii.txt", b"hello application/vnd.ipld.car\n".to_vec() )]
-// #[test_case("dir-with-files.car", "multiblock.txt", vec![] )]
+// #[test_case("dir-with-files.car", "multiblock.txt", vec![] => ignore("Not implemented yet") )]
 fn vfs_path_content(name: &str, path: &str, exp_content: Vec<u8>) -> Result<()> {
 	let fs = CarFs::from(ContentAddressableArchive::load(test_fixtures_file(name))?);
 

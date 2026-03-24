@@ -91,6 +91,8 @@ where
 	}
 }
 
+/// # TODO:
+/// - Look better architecture to append file and support VFS.
 impl<T, W> Drop for DeferedAppendFile<T, W>
 where
 	T: Read + Seek + From<<W as CarFile>::Reader>,
@@ -98,6 +100,8 @@ where
 	Error: From<<W as CarFile>::IntoReaderErr>,
 {
 	fn drop(&mut self) {
-		let _ = self.ref_add_to_car();
+		if let Err(e) = self.ref_add_to_car() {
+			tracing::error!(?e, "DeferedAppendFile: failed to commit block on drop");
+		}
 	}
 }

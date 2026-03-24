@@ -13,12 +13,6 @@ pub trait ArenaItem {
 	type Id: Ord;
 
 	fn index(&self) -> Option<Self::Id>;
-	/*
-	fn parent_id(&self) -> Option<ArenaId>;
-	fn children(&self) -> Vec<Self>
-	where
-		Self: Sized;
-	*/
 }
 
 /// Arena allocator with optional indexed lookup. Stores items in a vector and maintains an
@@ -68,15 +62,6 @@ impl<T: ArenaItem> Arena<T> {
 
 		id
 	}
-
-	/*
-	pub fn recursive_push(&mut self, item: T) -> ArenaId {
-		let children = item.children();
-		let id = self.push(item);
-		let _child_ids = children.into_iter().map(|child| self.push(child)).collect::<Vec<_>>();
-		id
-	}
-	*/
 
 	/// Returns an iterator over all items in the arena.
 	pub fn iter(&self) -> Iter<'_, T> {

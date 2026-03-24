@@ -5,7 +5,7 @@ use crate::{
 	dag_pb::{DagPb, Link},
 	ensure,
 	error::{DagPbResult, Error, Result},
-	fail, Arena, BoundedReader, CIDBuilder, ContextLen, ReaderWithLen,
+	fail, BoundedReader, CIDBuilder, ContextLen, ReaderWithLen,
 };
 
 use derivative::Derivative;
@@ -63,44 +63,6 @@ impl<T: Read + Seek> ArenaItem for Block<T> {
 	fn index(&self) -> Option<Self::Id> {
 		self.cid
 	}
-
-	/*
-	fn children(&self) -> Vec<Self> {
-		match &self.content {
-			BlockContent::DagPb(DagPb::MultiBlockFile(mbf)) => {
-				let mut local_arena = Arena::default();
-				let mut offset = 0u64;
-
-				mbf.links()
-					.iter()
-					.map(|link| {
-						let sub_reader = mbf
-							.reader()
-							.sub(offset..offset + link.cumulative_dag_size)
-							.expect("Sub reader is valid in `Block::children`");
-						let codec = CidCodec::try_from(link.cid.codec()).expect("Generated block uses valid CID codec");
-						let block = match codec {
-							CidCodec::Raw => Block::new(link.cid, BlockContent::Raw(sub_reader)),
-						CidCodec::DagPb => {
-								let child_id = DagPb::load(&mut local_arena, link.cid, sub_reader)
-									.expect("Block previously loaded .qed");
-								let block_ref = local_arena.get(child_id).expect("Node inserted previously .qed");
-								debug_assert_eq!(block_ref.cid(), Some(&link.cid));
-
-								(*block_ref).clone()
-							},
-							_ => unimplemented!("Unimplemented CID codec on `Block::children`"),
-						};
-						offset += link.cumulative_dag_size;
-
-						block
-					})
-					.collect()
-			},
-			_ => vec![],
-		}
-	}
-	*/
 }
 
 impl<T> std::fmt::Debug for Block<T> {
@@ -123,22 +85,16 @@ impl<T: Seek + Read> CIDBuilder for Block<T> {
 // ===========================================================================
 
 impl<T: Read + Seek + 'static> Block<T> {
-	pub fn write<W: Write>(&self, arena: &Arena<Block<T>>, w: &mut W, config: &Config) -> Result<u64> {
+	pub fn write<W: Write>(&self, w: &mut W) -> Result<u64> {
 		let cid = self.cid.as_ref();
 		match &self.content {
-			BlockContent::Raw(reader) => write_raw(w, cid, reader, config),
-			BlockContent::DagPb(dag_pb) => write_dag_pb(w, arena, cid, dag_pb, config),
+			BlockContent::Raw(reader) => write_raw(w, cid, reader),
+			BlockContent::DagPb(dag_pb) => write_dag_pb(w, cid, dag_pb),
 		}
 	}
 }
 
-fn write_dag_pb<W: Write, T: Read + Seek + 'static>(
-	w: &mut W,
-	_arena: &Arena<Block<T>>,
-	cid: Option<&Cid>,
-	dag_pb: &DagPb<T>,
-	_config: &Config,
-) -> Result<u64> {
+fn write_dag_pb<W: Write, T: Read + Seek + 'static>(w: &mut W, cid: Option<&Cid>, dag_pb: &DagPb<T>) -> Result<u64> {
 	match cid {
 		Some(cid) => {
 			let ReaderWithLen { mut reader, len } = dag_pb.as_reader_with_len()?;
@@ -148,12 +104,7 @@ fn write_dag_pb<W: Write, T: Read + Seek + 'static>(
 	}
 }
 
-fn write_raw<W: Write, T: Read + Seek>(
-	w: &mut W,
-	cid: Option<&Cid>,
-	reader: &BoundedReader<T>,
-	_config: &Config,
-) -> Result<u64> {
+fn write_raw<W: Write, T: Read + Seek>(w: &mut W, cid: Option<&Cid>, reader: &BoundedReader<T>) -> Result<u64> {
 	match cid {
 		Some(cid) => {
 			let reader_len = reader.bound_len();

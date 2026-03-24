@@ -27,13 +27,6 @@ impl<T: Read + Seek> CarFs<T> {
 	pub fn lock(&self) -> Result<MutexGuard<'_, ContentAddressableArchive<T>>> {
 		self.car.lock().map_err(Into::into)
 	}
-
-	/*
-	pub(crate) fn add_file(&self, name: String, parent_id: ArenaId, reader: T) -> Result<()> {
-		let mut car = self.lock()?;
-		car.add_file(name, parent_id, reader)
-	}
-	*/
 }
 
 impl<T: Read + Seek> From<ContentAddressableArchive<T>> for CarFs<T> {
