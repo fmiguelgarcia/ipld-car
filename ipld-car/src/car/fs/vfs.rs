@@ -1,15 +1,12 @@
 use crate::{
 	car::{
-		fs::{defered_append_file::DeferedAppendFile, CarFile, CarFs},
-		BlockContent, ContentAddressableArchive,
+		fs::{deferred_append_file::DeferredAppendFile, CarFs, RWTransmuter},
+		ContentAddressableArchive,
 	},
-	dag_pb::DagPb,
 	error::{Error, Result},
-	fail,
 };
 
 use std::{
-	ffi::OsStr,
 	fmt::Debug,
 	io::{Read, Seek},
 	path::Path,
@@ -23,57 +20,40 @@ use vfs::{
 
 impl<T> FileSystem for CarFs<T>
 where
-	T: Read + Seek + Debug + Sync + Send + 'static + CarFile,
-	<T as CarFile>::Writer: CarFile<Reader = T> + Seek + Send + Sync,
-	Error: From<<<T as CarFile>::Writer as CarFile>::IntoReaderErr>,
+	T: RWTransmuter + Read + Seek + Debug + Sync + Send + 'static,
+	T: From<<<T as RWTransmuter>::Writer as RWTransmuter>::Reader>,
+	<T as RWTransmuter>::Writer: Seek + Send + Sync + 'static,
+	Error: From<<<T as RWTransmuter>::Writer as RWTransmuter>::IntoReaderErr>,
 {
 	fn read_dir(&self, path: &str) -> VfsResult<Box<dyn Iterator<Item = String> + Send>> {
 		let path = Path::new(path);
 		let car = car_lock(&self.car)?;
-		let found = car.path_to_block(path)?;
+		let found = car.path_to_block_id(path)?;
 
-		match &found.content {
-			BlockContent::DagPb(DagPb::Dir(dir)) => {
-				let names = dir.entries().keys().cloned().collect::<Vec<_>>();
-				Ok(Box::new(names.into_iter()))
-			},
-			_ => Err(VfsErrorKind::NotSupported.into()),
-		}
+		let entries = car.outgoing_links_as_entries(found).into_iter().filter_map(|link| link.name).collect::<Vec<_>>();
+
+		Ok(Box::new(entries.into_iter()))
 	}
 
 	fn create_file(&self, path: &str) -> VfsResult<Box<dyn SeekAndWrite + Send>> {
 		let path = Path::new(path);
-		let file_name = path.file_name().and_then(OsStr::to_str).ok_or(VfsErrorKind::InvalidPath)?;
-		let parent_path = path.parent().unwrap_or_else(|| Path::new("."));
+		let writer = <T as RWTransmuter>::Writer::temporal()?;
 
-		let parent_id = self.lock()?.path_to_block_id(parent_path)?;
-		let writer = <T as CarFile>::Writer::temporal()?;
-
-		let defered_appender = DeferedAppendFile::new(self, parent_id, parent_path, file_name.to_string(), writer);
-		Ok(Box::new(defered_appender))
+		let deferred_appender = DeferredAppendFile::<T, _>::new(self, path, writer);
+		Ok(Box::new(deferred_appender))
 	}
 
 	fn create_dir(&self, path: &str) -> VfsResult<()> {
 		let path = Path::new(path);
-		let dir_name = path.file_name().and_then(OsStr::to_str).ok_or(VfsErrorKind::InvalidPath)?;
-		let parent_path = path.parent().unwrap_or_else(|| Path::new("."));
-
 		let mut car = car_lock(&self.car)?;
-		car.create_dir(parent_path, dir_name).map_err(Into::into)
+		car.create_dir(path).map_err(Into::into)
 	}
 
 	fn open_file(&self, path: &str) -> VfsResult<Box<dyn SeekAndRead + Send>> {
 		let path = Path::new(path);
-
 		let car = car_lock(&self.car)?;
-		let found = car.path_to_block(path)?;
-		match &found.content {
-			BlockContent::Raw(reader) => Ok(Box::new(reader.clone_and_rewind())),
-			BlockContent::DagPb(dag_pb) => match dag_pb {
-				DagPb::SingleBlockFile(sbl) => Ok(sbl.reader()),
-				DagPb::MultiBlockFile(..) | DagPb::Symlink(..) | DagPb::Dir(..) => fail!(VfsErrorKind::FileNotFound),
-			},
-		}
+		let file = car.open_file(path)?;
+		Ok(Box::new(file))
 	}
 
 	fn exists(&self, path: &str) -> VfsResult<bool> {
@@ -86,10 +66,8 @@ where
 	/// Returns the file metadata for the file at this path
 	fn metadata(&self, path: &str) -> VfsResult<VfsMetadata> {
 		let path = Path::new(path);
-		let car = car_lock(&self.car)?;
-		let found = car.path_to_block(path)?;
-
-		car.metadata_by_ref(found)
+		let meta = car_lock(&self.car)?.metadata(path).map(Into::into)?;
+		Ok(meta)
 	}
 
 	/// Opens the file at this path for appending

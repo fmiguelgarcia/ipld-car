@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 libipld = { workspace = true, features = ["dag-pb", "dag-json"] }
+petgraph.workspace = true
 
 # Derive helpers & tools
 derive_builder.workspace = true
@@ -27,6 +28,7 @@ strum.workspace = true
 
 # Extra containers
 bytes = { workspace = true, features = ["serde"] }
+smallvec.workspace = true
 
 # Units 
 nbytes.workspace = true
@@ -57,14 +59,15 @@ clap = { workspace = true, optional = true }
 
 [dev-dependencies]
 test-case.workspace = true
+pretty_env_logger.workspace = true
 test-log.workspace = true
 anyhow.workspace = true
 criterion.workspace = true
 
 [features]
-default = [ "std" ]
+default = ["std", "vfs"]
 jumbo-chunks = []
 test_helpers = []
-cli = [ "dep:clap" ]
-vfs = [ "dep:vfs" ]
-std = [ "bytes/std", "dep:ciborium", "derive_builder/std", "prost/std", "vfs" ]
+cli = ["dep:clap"]
+vfs = ["dep:vfs"]
+std = ["bytes/std", "dep:ciborium", "derive_builder/std", "prost/std"]

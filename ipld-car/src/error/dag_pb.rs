@@ -1,4 +1,4 @@
-use crate::{error::CidErr, BoundedReaderErr};
+use crate::bounded_reader::error::BoundedReaderErr;
 
 use std::io;
 use thiserror::Error;
@@ -9,8 +9,6 @@ pub type DagPbResult<T> = Result<T, DagPbErr>;
 pub enum DagPbErr {
 	#[error("PbNode cannot be decoded because it exceeds the buffer limit")]
 	ExceedBufLimitOnDecode,
-	#[error("Shared content reader is poisoned")]
-	ReaderPoisoned,
 	#[error("File too large")]
 	FileTooLarge,
 
@@ -20,8 +18,6 @@ pub enum DagPbErr {
 	UnixFs(#[from] UnixFsErr),
 	#[error(transparent)]
 	BoundedReader(#[from] BoundedReaderErr),
-	#[error(transparent)]
-	Cid(#[from] CidErr),
 }
 
 #[derive(Error, Debug)]
@@ -36,11 +32,9 @@ pub enum UnixFsErr {
 	DataTypeNotSupported(i32),
 	#[error("UnixFs file with blocksizes {0} elements and {1} links")]
 	BlocksizesLenDiffLinksLen(usize, usize),
-	#[error("UnixFs file contains links that overflows the maximum file size")]
-	LinkSizeOverflow,
 	#[error("UnixFs symlink MUST NOT have children in `PbNode.links`")]
 	SymlinkWithChildren,
-	#[error("UnixFs symlink DOES NOT contains information about symlink")]
+	#[error("UnixFs symlink DOES NOT contains information")]
 	MissingSymlinkInfo,
 	#[error("UnixFs symlink's path is NOT an UFT-8")]
 	SymlinkPathUtf8,

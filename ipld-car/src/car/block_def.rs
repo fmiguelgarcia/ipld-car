@@ -1,6 +1,6 @@
 use crate::{
 	ensure,
-	error::{InvalidErr, Result},
+	error::{Error, InvalidErr, Result},
 };
 
 use derive_more::Constructor;
@@ -28,7 +28,7 @@ impl BlockDef {
 		let encoded_cid_len = start - cid_start;
 		ensure!(section_len >= encoded_cid_len, InvalidErr::BlockLen);
 
-		let range = start..cid_start.saturating_add(section_len);
+		let range = start..cid_start.checked_add(section_len).ok_or(Error::FileTooLarge)?;
 		Ok(Some(Self { cid, range }))
 	}
 }

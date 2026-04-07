@@ -1,127 +1,60 @@
 use crate::{
-	arena::ArenaItem,
-	car::block_content::BlockContent,
-	config::Config,
-	dag_pb::{DagPb, Link},
-	ensure,
-	error::{DagPbResult, Error, Result},
-	fail, BoundedReader, CIDBuilder, ContextLen, ReaderWithLen,
+	bounded_reader::{sync::BoundedReader, traits::Bounded},
+	dag_pb::{DagPb, DagPbType},
+	traits::ContextLen,
 };
 
 use derivative::Derivative;
-use derive_new::new;
 use libipld::Cid;
-use std::io::{self, copy, Read, Seek, Write};
 
-#[derive(Derivative, new)]
-#[derivative(Clone)]
+#[derive(Derivative, derive_more::Debug)]
+#[derivative(Clone(bound = ""))]
+pub enum BlockType<T> {
+	Raw,
+	DagPb(DagPb<T>),
+}
+
+#[derive(Derivative, derive_more::Debug)]
+#[derivative(Clone(bound = ""))]
 pub struct Block<T> {
-	#[new(into)]
-	pub cid: Option<Cid>,
-	#[derivative(Clone(bound = ""))]
-	#[new(into)]
-	pub content: BlockContent<T>,
+	pub cid: Cid,
+	pub r#type: BlockType<T>,
+	pub data: BoundedReader<T>,
 }
 
 impl<T> Block<T> {
-	pub fn push_directory_entry(&mut self, name: String, link: Link) -> DagPbResult<()> {
-		if let BlockContent::DagPb(DagPb::Dir(directory)) = &mut self.content {
-			ensure!(!directory.entries().contains_key(&name), io::Error::from(io::ErrorKind::AlreadyExists));
-			directory.mut_entries().insert(name, link);
-			self.invalidate();
+	pub fn new_raw<D>(cid: Cid, data: D) -> Self
+	where
+		D: Into<BoundedReader<T>>,
+	{
+		Self { cid, data: data.into(), r#type: BlockType::Raw }
+	}
 
-			Ok(())
-		} else {
-			fail!(io::Error::from(io::ErrorKind::NotFound))
+	pub fn new_dag_pb<PB, D>(cid: Cid, dag_pb: PB, data: D) -> Self
+	where
+		D: Into<BoundedReader<T>>,
+		PB: Into<DagPb<T>>,
+	{
+		Self { cid, data: data.into(), r#type: BlockType::DagPb(dag_pb.into()) }
+	}
+
+	pub fn dag_pb_type(&self) -> Option<&DagPbType> {
+		match &self.r#type {
+			BlockType::Raw => None,
+			BlockType::DagPb(dag) => Some(&dag.r#type),
 		}
 	}
 }
 
 impl<T> ContextLen for Block<T> {
 	fn data_len(&self) -> u64 {
-		self.content.data_len()
+		self.data.bound_len()
 	}
 
-	fn dag_pb_len(&self) -> u64 {
-		self.content.dag_pb_len()
-	}
-
-	fn invalidate(&mut self) {
-		self.cid = None;
-		self.content.invalidate()
-	}
-
-	fn was_invalidated(&self) -> bool {
-		self.cid.is_none() || self.content.was_invalidated()
-	}
-}
-
-impl<T: Read + Seek> ArenaItem for Block<T> {
-	type Id = Cid;
-
-	#[inline]
-	fn index(&self) -> Option<Self::Id> {
-		self.cid
-	}
-}
-
-impl<T> std::fmt::Debug for Block<T> {
-	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		let cid = self.cid.as_ref().map(Cid::to_string);
-		f.debug_struct("Block").field("cid", &cid).field("content", &self.content).finish()
-	}
-}
-
-// Ipld & CID related
-// ===========================================================================
-
-impl<T: Seek + Read> CIDBuilder for Block<T> {
-	fn cid(&self, config: &Config) -> Result<Cid> {
-		self.content.cid(config)
-	}
-}
-
-// Write into
-// ===========================================================================
-
-impl<T: Read + Seek + 'static> Block<T> {
-	pub fn write<W: Write>(&self, w: &mut W) -> Result<u64> {
-		let cid = self.cid.as_ref();
-		match &self.content {
-			BlockContent::Raw(reader) => write_raw(w, cid, reader),
-			BlockContent::DagPb(dag_pb) => write_dag_pb(w, cid, dag_pb),
+	fn pb_data_len(&self) -> u64 {
+		match &self.r#type {
+			BlockType::Raw => self.data.bound_len(),
+			BlockType::DagPb(dag_pb) => dag_pb.data.bound_len() + self.data.bound_len(),
 		}
 	}
-}
-
-fn write_dag_pb<W: Write, T: Read + Seek + 'static>(w: &mut W, cid: Option<&Cid>, dag_pb: &DagPb<T>) -> Result<u64> {
-	match cid {
-		Some(cid) => {
-			let ReaderWithLen { mut reader, len } = dag_pb.as_reader_with_len()?;
-			write_block(cid, &mut reader, len, w)
-		},
-		None => unimplemented!("Block:write_dag_pb"),
-	}
-}
-
-fn write_raw<W: Write, T: Read + Seek>(w: &mut W, cid: Option<&Cid>, reader: &BoundedReader<T>) -> Result<u64> {
-	match cid {
-		Some(cid) => {
-			let reader_len = reader.bound_len();
-			let mut reader = reader.clone_and_rewind();
-			write_block(cid, &mut reader, reader_len, w)
-		},
-		None => unimplemented!("Block::write_raw"),
-	}
-}
-
-fn write_block<R: Read, W: Write>(cid: &Cid, reader: &mut R, reader_len: u64, w: &mut W) -> Result<u64> {
-	let cid = cid.to_bytes();
-	let section_len = reader_len.checked_add(cid.len() as u64).ok_or(Error::FileTooLarge)?;
-
-	let leb_written = leb128::write::unsigned(w, section_len)? as u64;
-	w.write_all(&cid)?;
-	let copied = copy(reader, w)?;
-
-	copied.checked_add(leb_written + cid.len() as u64).ok_or(Error::FileTooLarge)
 }

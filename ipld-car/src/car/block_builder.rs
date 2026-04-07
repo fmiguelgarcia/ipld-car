@@ -1,164 +1,129 @@
 use crate::{
-	car::{block_content::BlockContent, Block},
-	config::{ChunkPolicy, CidCodec, Config, DAGLayout, HasherAndWrite, LeafPolicy},
-	dag_pb::{DagPb, Link, MultiBlockFile, SBFContent, SingleBlockFile},
+	bounded_reader::{sync::BoundedReader, traits::Bounded},
+	car::{Block, BlockId},
+	config::{ChunkPolicy, DAGLayout, HasherAndWrite, LeafPolicy},
+	dag_pb::DagPb,
 	ensure,
 	error::{Error, NotSupportedErr, Result},
-	BoundedReader, CIDBuilder, ContextLen,
+	traits::ContextLen,
+	ContentAddressableArchive,
 };
 
-use bytes::Bytes;
-use libipld::{multihash::MultihashDigest, pb::PbNode, Cid};
-use std::io::{copy, Read, Seek};
+use libipld::Cid;
+use std::{
+	collections::{vec_deque, VecDeque},
+	io::{copy, Read, Seek},
+	iter::Peekable,
+};
 
 /// Creates blocks based on the given configuration.
 ///
 /// # TODO
 /// - Empty file is failing.
-pub struct BlockBuilder<T> {
-	config: Config,
+pub struct BlockBuilder<'a, T> {
+	car: &'a mut ContentAddressableArchive<T>,
 	hasher: Box<dyn HasherAndWrite>,
 	reader: BoundedReader<T>,
 }
 
-impl<T: Read + Seek> BlockBuilder<T> {
-	pub fn new(reader: BoundedReader<T>, config: Config) -> Result<Self> {
-		let hasher = config.hasher()?;
-		Ok(Self { config, hasher, reader })
+impl<'a, T: Read + Seek> BlockBuilder<'a, T> {
+	pub fn new(car: &'a mut ContentAddressableArchive<T>, reader: BoundedReader<T>) -> Result<Self> {
+		let hasher = car.config.hasher()?;
+		Ok(Self { car, hasher, reader })
 	}
 
-	pub fn build(self) -> Result<Block<T>> {
-		let chunk_policy = self.config.chunk_policy;
+	pub fn build(self) -> Result<BlockId> {
+		let chunk_policy = self.car.config.chunk_policy;
 		match chunk_policy {
 			ChunkPolicy::FixedSize(chunk_size) => self.with_chunk(chunk_size as u64),
 		}
 	}
 
-	fn with_chunk(mut self, chunk_size: u64) -> Result<Block<T>> {
+	fn with_chunk(mut self, chunk_size: u64) -> Result<BlockId> {
 		let mut leaves = self.leaves_from_chunks(chunk_size)?;
 
 		// Create tree if needed.
 		let leaves_len = leaves.len();
 		match leaves_len {
 			0 => todo!("Create an empty file"),
-			1 => Ok(leaves.pop().expect("One item exists .qed")),
+			1 => Ok(leaves.pop_front().expect("One item exists .qed")),
 			_ => self.tree_from_leaves(leaves),
 		}
 	}
 
-	fn tree_from_leaves(&mut self, leaves: Vec<Block<T>>) -> Result<Block<T>> {
-		match self.config.layout {
+	fn tree_from_leaves(&mut self, leaves: VecDeque<BlockId>) -> Result<BlockId> {
+		match self.car.config.layout {
 			DAGLayout::Balanced(..) => self.balanced_tree_from_leaves(leaves),
 			DAGLayout::Trickle(..) | DAGLayout::Flat => self.trickle_tree_from_leaves(leaves),
 		}
 	}
 
-	fn balanced_tree_from_leaves(&mut self, _leaves: Vec<Block<T>>) -> Result<Block<T>> {
+	fn balanced_tree_from_leaves(&mut self, _leaves: VecDeque<BlockId>) -> Result<BlockId> {
 		unimplemented!();
 	}
 
-	fn trickle_tree_from_leaves(&mut self, leaves: Vec<Block<T>>) -> Result<Block<T>> {
-		let max_children = self.config.layout.max_children_per_layer();
-		ensure!(max_children > 1, NotSupportedErr::DAGLayout(self.config.layout));
+	fn trickle_tree_from_leaves(&mut self, leaves: VecDeque<BlockId>) -> Result<BlockId> {
+		let max_children = self.car.config.layout.max_children_per_layer();
+		ensure!(max_children > 1, NotSupportedErr::DAGLayout(self.car.config.layout));
 
-		self.recursive_trickle_tree_from_leaves(max_children as usize, 0, &leaves)
+		self.recursive_trickle_tree_from_leaves(max_children as usize, leaves.into_iter().peekable())
 	}
 
 	fn recursive_trickle_tree_from_leaves(
 		&mut self,
 		max_children: usize,
-		offset: u64,
-		leaves: &[Block<T>],
-	) -> Result<Block<T>> {
-		let chunk = &leaves[..max_children];
-		let mut links = chunk
-			.iter()
-			.map(|leaf| {
-				let cid = leaf.cid.expect("CID was created .qed");
-				Link::new(cid, leaf.dag_pb_len(), leaf.data_len(), None, None)
-			})
-			.collect::<Vec<_>>();
+		mut leaves: Peekable<vec_deque::IntoIter<BlockId>>,
+	) -> Result<BlockId> {
+		let mut leaf_ids = leaves.by_ref().take(max_children).collect::<Vec<_>>();
 
-		let next_chunks = &leaves[max_children..];
-		if !next_chunks.is_empty() {
-			let next_offset = links.iter().map(|l| l.cumulative_dag_size).sum();
-			let block = self.recursive_trickle_tree_from_leaves(max_children, next_offset, next_chunks)?;
-			let cid = block.cid.expect("Block CID is generated .qed");
-			let link = Link::new(cid, block.dag_pb_len(), block.data_len(), None, None);
-			links.push(link)
+		if leaves.peek().is_some() {
+			let sub_id = self.recursive_trickle_tree_from_leaves(max_children, leaves)?;
+			leaf_ids.push(sub_id);
 		}
 
-		let acc_link_size = links.iter().map(|l| l.cumulative_dag_size).sum::<u64>();
-		let sub_reader = self.reader.sub(offset..offset + acc_link_size).expect("Bounded sub range is valid .qed");
-		let mbf = MultiBlockFile::new(links, sub_reader);
-		let cid = mbf.cid(&self.config)?;
+		let block_sizes = leaf_ids
+			.iter()
+			.filter_map(|id| self.car.dag.node_weight(*id))
+			.map(|block| block.data_len())
+			.collect::<Vec<_>>();
 
-		Ok(Block::new(cid, DagPb::MultiBlockFile(mbf)))
+		let dag_pb = DagPb::multi_block_file(block_sizes, ());
+		let block = Block::new_dag_pb(Cid::default(), dag_pb, ());
+
+		let block_id = self.car.add_block_without_cid(block);
+		self.car.rebuild(block_id)?;
+		self.car.link_children(block_id, &leaf_ids);
+
+		Ok(block_id)
 	}
 
 	// Build leaves nodes
 	// =========================================================================
-	fn leaves_from_chunks(&mut self, chunk_size: u64) -> Result<Vec<Block<T>>> {
-		match self.config.leaf_policy {
-			LeafPolicy::Raw => self.raw_leaves_from_chunks(chunk_size),
-			LeafPolicy::UnixFs => self.unixfs_leaves_from_chunks(chunk_size),
-		}
-	}
 
-	fn raw_leaves_from_chunks(&mut self, chunk_size: u64) -> Result<Vec<Block<T>>> {
+	fn leaves_from_chunks(&mut self, chunk_size: u64) -> Result<VecDeque<BlockId>> {
+		// How leaf's content is created: Raw or UnixFs
+		let leaf_builder = match self.car.config.leaf_policy {
+			LeafPolicy::Raw => |data| Block::new_raw(Cid::default(), data),
+			LeafPolicy::UnixFs =>
+				|data| Block::new_dag_pb(Cid::default(), DagPb::single_block_file(data), BoundedReader::empty()),
+		};
+
 		let mut offset = 0u64;
-		let mut leaves = vec![];
+		let max_leaves_len = self.reader.bound_len() / chunk_size + 1;
+		let mut leaves = VecDeque::with_capacity(max_leaves_len as usize);
 
 		loop {
 			let next_offset = offset.checked_add(chunk_size).ok_or(Error::FileTooLarge)?;
-			let mut chunk = self.reader.clamped_sub(offset..next_offset);
-			offset = match copy(&mut chunk, &mut self.hasher)? {
+			let mut data_chunk = self.reader.clamped_sub(offset..next_offset);
+			offset = match copy(&mut data_chunk, &mut self.hasher)? {
 				0 if !leaves.is_empty() => break,
 				_ => next_offset,
 			};
 
-			let digest = self.config.hash_code.wrap(self.hasher.finalize())?;
-			let cid = Cid::new_v1(CidCodec::Raw as u64, digest);
-			self.hasher.reset();
-
-			let leaf = Block::new(cid, BlockContent::Raw(chunk));
-			leaves.push(leaf);
-		}
-
-		Ok(leaves)
-	}
-
-	fn unixfs_leaves_from_chunks(&mut self, chunk_size: u64) -> Result<Vec<Block<T>>> {
-		let mut offset = 0u64;
-		let mut leaves = vec![];
-
-		loop {
-			let next_offset = offset.checked_add(chunk_size).ok_or(Error::FileTooLarge)?;
-			let chunk = self.reader.clamped_sub(offset..next_offset);
-			if chunk.bound_len() == 0 && !leaves.is_empty() {
-				break;
-			}
-			offset = next_offset;
-
-			let sbf_content = if chunk.bound_len() < chunk_size {
-				let mut buf = Vec::with_capacity(chunk.bound_len() as usize);
-				chunk.clone_and_rewind().read_to_end(&mut buf)?;
-				SBFContent::from(Bytes::from(buf))
-			} else {
-				SBFContent::from(chunk)
-			};
-			let sbf = SingleBlockFile::from(sbf_content);
-
-			// Calculate CID
-			let pb_node = PbNode::from(&sbf).into_bytes();
-			self.hasher.update(&pb_node);
-			drop(pb_node);
-			let digest = self.config.hash_code.wrap(self.hasher.finalize())?;
-			self.hasher.reset();
-
-			let cid = Cid::new_v1(CidCodec::DagPb as u64, digest);
-			let leaf = Block::new(cid, BlockContent::DagPb(DagPb::SingleBlockFile(sbf)));
-			leaves.push(leaf);
+			let block = leaf_builder(data_chunk);
+			let block_id = self.car.add_block_without_cid(block);
+			self.car.rebuild(block_id)?;
+			leaves.push_back(block_id)
 		}
 
 		Ok(leaves)

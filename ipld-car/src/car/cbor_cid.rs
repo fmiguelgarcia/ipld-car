@@ -18,7 +18,7 @@ impl Serialize for CborCid {
 		payload.push(0x00);
 		payload.extend_from_slice(&cid_bytes);
 
-		// Add tag(42) usando ciborium::tag::Required<_, 42>
+		// Add tag(42) using ciborium::tag::Required<_, 42>
 		let tagged = Required::<ByteBuf, 42>(ByteBuf::from(payload));
 		tagged.serialize(s)
 	}
@@ -29,7 +29,7 @@ impl<'de> Deserialize<'de> for CborCid {
 		let Required::<ByteBuf, 42>(bytes) = Required::deserialize(d)?;
 
 		if bytes[0] != 0x00 {
-			return Err(de::Error::custom(format!("Multibase prefix invalid: 0x{:02x} (esperado 0x00)", bytes[0])));
+			return Err(de::Error::custom(format!("Multibase prefix invalid: 0x{:02x} (expected 0x00)", bytes[0])));
 		}
 
 		let cid = Cid::try_from(&bytes[1..]).map_err(|e| de::Error::custom(format!("CID invalid: {}", e)))?;

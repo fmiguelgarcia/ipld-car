@@ -1,5 +1,5 @@
 [workspace]
-members = ["ipld-car", "carcli"]
+members = ["ipld-car"]
 resolver = "2"
 
 [workspace.package]
@@ -41,6 +41,7 @@ default_constructed_unit_structs = { level = "allow", priority = 2 } # stylistic
 
 [workspace.dependencies]
 ipld-car = { path = "ipld-car" }
+petgraph = "0.8.3"
 
 # libipld: CID
 libipld = { version = "0.16.0", default-features = false, features = [
@@ -62,10 +63,14 @@ derivative = "2.2.0"
 derive-new = "0.7.0"
 strum = { version = "0.27", features = ["derive"] }
 
-
 # Extra containers
-either = "1"
 bytes = { version = "1.8.0", default-features = false }
+smallvec = { version = "1.15", features = [
+	"union",
+	"const_generics",
+	"const_new",
+] }
+
 
 # Units
 nbytes = "0.1"
@@ -93,7 +98,7 @@ clap = { version = "4", features = ["derive"] }
 
 # Error, logs and benchs
 thiserror = { version = "2.0.11", default-features = false }
-tracing = "0.1.40"
+tracing = { version = "0.1.40", features = ["log"] }
 anyhow = "1"
 criterion = "0.5.1"
 test-case = "3.3.1"
