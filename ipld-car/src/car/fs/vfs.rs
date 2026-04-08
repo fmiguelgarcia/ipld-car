@@ -27,10 +27,7 @@ where
 {
 	fn read_dir(&self, path: &str) -> VfsResult<Box<dyn Iterator<Item = String> + Send>> {
 		let path = Path::new(path);
-		let car = car_lock(&self.car)?;
-		let found = car.path_to_block_id(path)?;
-
-		let entries = car.outgoing_links_as_entries(found).into_iter().filter_map(|link| link.name).collect::<Vec<_>>();
+		let entries = car_lock(&self.car)?.read_dir(path)?.map(|entry| entry.to_owned()).collect::<Vec<_>>();
 
 		Ok(Box::new(entries.into_iter()))
 	}
@@ -57,10 +54,8 @@ where
 	}
 
 	fn exists(&self, path: &str) -> VfsResult<bool> {
-		let path = Path::new(path);
 		let car = car_lock(&self.car)?;
-		let _found_id = car.path_to_block_id(path)?;
-		Ok(true)
+		Ok(car.exists(Path::new(path)))
 	}
 
 	/// Returns the file metadata for the file at this path

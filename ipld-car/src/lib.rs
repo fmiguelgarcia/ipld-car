@@ -1,5 +1,7 @@
 pub mod bounded_reader;
 pub mod car;
+#[cfg(feature = "vfs")]
+pub use car::fs::CarFs;
 pub use car::ContentAddressableArchive;
 pub mod config;
 pub use config::Config;

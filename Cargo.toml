@@ -1,5 +1,5 @@
 [workspace]
-members = ["ipld-car"]
+members = ["ipld-car", "carcli"]
 resolver = "2"
 
 [workspace.package]

@@ -95,14 +95,14 @@ fn output_test_file(car_file_name: &str, ext: &str) -> String {
 
 // ── info tests ────────────────────────────────────────────────────────────────
 
-#[test_case("dag-pb.car", "info")]
-#[test_case("dir-with-duplicate-files.car", "info")]
-#[test_case("dir-with-files.car", "info")]
-#[test_case("dir-with-percent-encoded-filename.car", "info")]
-#[test_case("fixtures.car", "info")]
-#[test_case("subdir-with-mixed-block-files.car", "info")]
-#[test_case("subdir-with-two-single-block-files.car", "info")]
-#[test_case("symlink.car", "info")]
+#[test_case("dag-pb.car", "info -B")]
+#[test_case("dir-with-duplicate-files.car", "info -B")]
+#[test_case("dir-with-files.car", "info -B")]
+#[test_case("dir-with-percent-encoded-filename.car", "info -B")]
+#[test_case("fixtures.car", "info -B")]
+#[test_case("subdir-with-mixed-block-files.car", "info -B")]
+#[test_case("subdir-with-two-single-block-files.car", "info -B")]
+#[test_case("symlink.car", "info -B")]
 fn info_test(car_file: &str, cmd: &str) {
 	let expected_content = output_test_file(car_file, "info.output");
 	let output = run_cli(car_file, cmd);

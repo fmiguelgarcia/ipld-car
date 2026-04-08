@@ -9,6 +9,7 @@ use crate::{
 use anyhow::{anyhow, Result};
 use libipld::{multihash::Code, Cid};
 use std::{fs::File, path::Path};
+use tempfile::tempfile;
 use test_case::test_case;
 use vfs::FileSystem;
 
@@ -130,14 +131,12 @@ fn empty_dag_pb_directory(config: Config, exp_cid: &str) -> Result<()> {
 #[test_case( Config::default(), "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku" ; "4.3.1 Empty RAW block" )]
 #[test_case( ConfigBuilder::default().leaf_policy(LeafPolicy::UnixFs).build().unwrap(), "bafybeif7ztnhq65lumvvtr4ekcwd2ifwgm3awq4zfr3srh462rwyinlb4y"; "4.3.1 Empty dag-pb file" )]
 fn empty_file(config: Config, exp_cid: &str) -> Result<()> {
-	const FILE_NAME: &str = "empty.txt";
-	let car = CarFs::from(ContentAddressableArchive::<File>::new(config)?);
+	let file_path = Path::new("empty.txt");
 
-	let mut file = car.create_file(FILE_NAME)?;
-	file.flush()?;
-	drop(file);
+	let mut car = ContentAddressableArchive::<File>::new_without_root(config);
+	car.add_file(file_path, tempfile()?)?;
 
-	let file_cid = car.lock()?.path_to_cid(Path::new(FILE_NAME)).copied().ok_or(anyhow!("Missing path"))?;
+	let file_cid = car.path_to_cid(file_path).copied().ok_or(anyhow!("Missing path"))?;
 	let file_cid = file_cid.to_string();
 	assert_eq!(file_cid, exp_cid);
 

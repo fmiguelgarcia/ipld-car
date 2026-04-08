@@ -48,7 +48,10 @@ impl<T> Block<T> {
 
 impl<T> ContextLen for Block<T> {
 	fn data_len(&self) -> u64 {
-		self.data.bound_len()
+		match &self.r#type {
+			BlockType::Raw => self.data.bound_len(),
+			BlockType::DagPb(dag_pb) => dag_pb.data_len(),
+		}
 	}
 
 	fn pb_data_len(&self) -> u64 {

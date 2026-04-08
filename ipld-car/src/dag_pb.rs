@@ -7,6 +7,7 @@ use crate::{
 	car::{Block, BlockId, ContentAddressableArchive},
 	error::{DagPbErr, DagPbResult, UnixFsErr},
 	fail, proto,
+	traits::ContextLen,
 };
 
 use bytes::{BufMut, BytesMut};
@@ -81,6 +82,20 @@ impl<T> DagPb<T> {
 impl<T> From<DagPbType> for DagPb<T> {
 	fn from(r#type: DagPbType) -> Self {
 		Self { r#type, data: ().into() }
+	}
+}
+
+impl<T> ContextLen for DagPb<T> {
+	fn data_len(&self) -> u64 {
+		match &self.r#type {
+			DagPbType::Dir | DagPbType::MissingBlock(..) | DagPbType::Symlink(..) => 0u64,
+			DagPbType::SingleBlockFile => self.data.bound_len(),
+			DagPbType::MultiBlockFile(mbf) => mbf.block_sizes.iter().sum(),
+		}
+	}
+
+	fn pb_data_len(&self) -> u64 {
+		self.data.bound_len()
 	}
 }
 

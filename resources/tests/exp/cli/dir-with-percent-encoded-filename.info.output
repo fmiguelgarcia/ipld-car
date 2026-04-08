@@ -2,6 +2,6 @@ File:            dir-with-percent-encoded-filename.car
 Blocks:          2
   Roots:         1
   Non-roots:     1
-Total DAG-PB:    128B
+Total DAG-PB:    90B
 Total Data:      38B
   [0] bafybeig675grnxcmshiuzdaz2xalm6ef4thxxds6o6ypakpghm5kghpc34

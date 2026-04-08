@@ -42,7 +42,7 @@ use petgraph::{
 };
 use smallvec::{smallvec, SmallVec};
 use std::{
-	collections::HashMap,
+	collections::{HashMap, HashSet, VecDeque},
 	fs::File,
 	io::{copy, BufWriter, Read, Seek, SeekFrom, Write},
 	path::{Component, Path},
@@ -101,6 +101,10 @@ impl ContentAddressableArchive<BufWriter<File>> {
 }
 
 impl<T> ContentAddressableArchive<T> {
+	pub fn new_without_root(config: Config) -> Self {
+		Self::base_new(BoundedReader::empty(), config)
+	}
+
 	fn base_new(content: BoundedReader<T>, config: Config) -> Self {
 		let root_ids = SmallBlockIds::new();
 		let index_by_cid = HashMap::new();
@@ -247,6 +251,10 @@ impl<T> ContentAddressableArchive<T> {
 		self.path_to_block(path).map(|block| &block.cid).ok()
 	}
 
+	fn outgoing_links(&self, id: BlockId) -> Vec<BlockId> {
+		self.dag.edges_directed(id, Direction::Outgoing).map(|edge| edge.target()).collect()
+	}
+
 	fn outgoing_links_as_entries(&self, id: BlockId) -> Vec<PbLink> {
 		let into_pb_link = |edge: EdgeReference<'_, Link>, name: &str| {
 			let target_id = edge.target();
@@ -285,11 +293,15 @@ impl<T> ContentAddressableArchive<T> {
 			})
 			.collect::<Vec<_>>()
 	}
+
+	pub fn block_count(&self) -> usize {
+		self.dag.node_count()
+	}
 }
 
 impl<T: Read + Seek> ContentAddressableArchive<T> {
 	pub fn new(config: Config) -> Result<Self> {
-		let mut this = Self::base_new(BoundedReader::empty(), config);
+		let mut this = Self::new_without_root(config);
 
 		// Add a root folder
 		let root_folder = Block::new_dag_pb(Cid::default(), DagPb::directory(), ());
@@ -324,28 +336,29 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 	fn rebuild(&mut self, id: BlockId) -> Result<()> {
 		let mut hasher = self.config.hasher()?;
 
-		let cid = {
+		let (cid, dag_pb_data) = {
 			let block = self.dag.node_weight(id).ok_or(NotFoundErr::BlockId(id))?;
 
 			// Remove current CID from indexes
 			self.index_by_cid.remove(&block.cid);
 
 			// Rebuild CID
-			let cid_codec = match &block.r#type {
+			let (cid_codec, dag_pb_data) = match &block.r#type {
 				BlockType::Raw => {
 					let _len = copy(&mut block.data.clone_and_rewind(), &mut hasher)?;
-					CidCodec::Raw
+					(CidCodec::Raw, Bytes::new())
 				},
 				BlockType::DagPb(dag_pb) => {
 					let pb_node = self.as_pb_node(id, dag_pb)?;
-					let pb_node_enc = Bytes::from(pb_node.into_bytes());
-					let _len = copy(&mut pb_node_enc.reader(), &mut hasher)?;
-					CidCodec::DagPb
+					let dag_pb_data = Bytes::from(pb_node.into_bytes());
+					let _len = copy(&mut dag_pb_data.clone().reader(), &mut hasher)?;
+					(CidCodec::DagPb, dag_pb_data)
 				},
 			};
 
 			let digest = self.config.hash_code.wrap(hasher.finalize())?;
-			Cid::new_v1(cid_codec as u64, digest)
+			let cid = Cid::new_v1(cid_codec as u64, digest);
+			(cid, dag_pb_data)
 		};
 
 		// Calculate the cumulative_dag_size
@@ -370,7 +383,11 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 
 		// Update Block
 		self.index_by_cid.insert(cid, id);
-		self.dag.node_weight_mut(id).ok_or(NotFoundErr::BlockId(id))?.cid = cid;
+		let block = self.dag.node_weight_mut(id).ok_or(NotFoundErr::BlockId(id))?;
+		block.cid = cid;
+		if let BlockType::DagPb(dag_pb) = &mut block.r#type {
+			dag_pb.data = BoundedReader::from(dag_pb_data);
+		}
 		Ok(())
 	}
 
@@ -463,7 +480,10 @@ impl<T> ContentAddressableArchive<T> {
 				},
 				DagPbType::Dir => Metadata::directory(),
 				DagPbType::Symlink(symlink) => {
-					let target = path.join(Path::new(&symlink.posix_path));
+					let symlink_path = Path::new(&symlink.posix_path);
+					let parent_path = path.parent().unwrap_or(Path::new("/"));
+
+					let target = parent_path.join(symlink_path);
 					let target_path = target.as_path();
 					check_loop_and_update(&mut open_block_ids, target_path, self.path_to_block_id(target_path)?)?;
 					let target_meta = self.metadata_with_loop_detector(target_path, open_block_ids)?;
@@ -474,6 +494,10 @@ impl<T> ContentAddressableArchive<T> {
 		};
 
 		Ok(meta)
+	}
+
+	pub fn exists(&self, path: &Path) -> bool {
+		self.path_to_block_id(path).ok().is_some()
 	}
 }
 
@@ -500,21 +524,25 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 		self.dag.add_edge(parent_id, new_dir_id, NamedLink::new(dir_name).into());
 		self.rebuild_ancestors(new_dir_id)
 	}
-}
 
-impl<T: Read + Seek> ContentAddressableArchive<T> {
 	pub fn add_file(&mut self, path: &Path, reader: T) -> Result<()> {
 		let os_name = path.file_name().ok_or_else(|| NotFoundErr::file_name(path))?;
 		let name = os_name.to_str().ok_or_else(|| InvalidErr::not_utf8_path(os_name))?;
-		let parent_path = path.parent().unwrap_or(Path::new("."));
-		let parent_id = self.path_to_block_id(parent_path)?;
 
 		// Create and add block.
 		let bounded = BoundedReader::from_reader(reader)?;
 		let block_id = BlockBuilder::new(self, bounded)?.build()?;
 
-		self.dag.add_edge(parent_id, block_id, NamedLink::new(name).into());
-		self.rebuild_ancestors(block_id)
+		if !self.root_ids.is_empty() {
+			let parent_path = path.parent().unwrap_or(Path::new("."));
+			let parent_id = self.path_to_block_id(parent_path)?;
+			self.dag.add_edge(parent_id, block_id, NamedLink::new(name).into());
+			self.rebuild_ancestors(block_id)
+		} else {
+			self.root_ids.push(block_id);
+			self.dag.add_edge(block_id, block_id, NamedLink::new(name).into());
+			Ok(())
+		}
 	}
 
 	pub fn root_cids(&self) -> Result<Vec<Cid>> {
@@ -621,6 +649,63 @@ fn write_block<R: Read, W: Write>(cid: Cid, reader_len: u64, reader: &mut R, w: 
 	let copied = copy(reader, w)?;
 
 	copied.checked_add(leb_written + cid.len() as u64).ok_or(Error::FileTooLarge)
+}
+
+impl<T> ContextLen for ContentAddressableArchive<T> {
+	fn data_len(&self) -> u64 {
+		let mut acc_len = 0u64;
+		let mut closed = HashSet::new();
+		let mut open = VecDeque::from_iter(self.root_ids.iter().copied());
+
+		while let Some(id) = open.pop_front() {
+			let Some(block) = self.dag.node_weight(id) else { continue };
+			let block_len = match &block.r#type {
+				BlockType::Raw => block.data.bound_len(),
+				BlockType::DagPb(dag_pb) => match &dag_pb.r#type {
+					DagPbType::Dir => {
+						for entry_id in self.outgoing_links(id) {
+							if entry_id != id && !open.contains(&entry_id) && !closed.contains(&entry_id) {
+								open.push_back(entry_id);
+							}
+						}
+						0u64
+					},
+					DagPbType::SingleBlockFile => dag_pb.data.bound_len(),
+					DagPbType::MultiBlockFile(mbf) => mbf.block_sizes.iter().sum(),
+					DagPbType::Symlink(..) | DagPbType::MissingBlock(..) => 0u64,
+				},
+			};
+
+			closed.insert(id);
+			acc_len = acc_len.saturating_add(block_len);
+		}
+
+		acc_len
+	}
+
+	fn pb_data_len(&self) -> u64 {
+		let mut acc_len = 0u64;
+		let mut closed = HashSet::new();
+		let mut open = VecDeque::from_iter(self.root_ids.iter().copied());
+
+		while let Some(id) = open.pop_front() {
+			let Some(block) = self.dag.node_weight(id) else { continue };
+			if let BlockType::DagPb(dag_pb) = &block.r#type {
+				if let DagPbType::Dir = &dag_pb.r#type {
+					for entry_id in self.outgoing_links(id) {
+						if entry_id != id && !open.contains(&entry_id) && closed.contains(&entry_id) {
+							open.push_back(entry_id);
+						}
+					}
+				}
+			}
+
+			closed.insert(id);
+			acc_len = acc_len.saturating_add(block.data.bound_len());
+		}
+
+		acc_len
+	}
 }
 
 // Tools
