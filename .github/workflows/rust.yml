@@ -19,10 +19,14 @@ jobs:
     - name: Install nightly rustfmt
       run: rustup toolchain install nightly --component rustfmt --profile minimal
     - name: Check Fmt (nightly)
-      run: cargo +nightly fmt --check
+      run: cargo +nightly fmt --check --verbose
     - name: Build (check)
       run: cargo check --verbose
     - name: Clippy
       run: cargo clippy -- -D warnings
     - name: Run Ipld CAR Lib tests 
-      run: cargo test -p ipld-car --verbose
+      run: |
+      pwd
+      ls -la -R 
+      env
+      cargo test -p ipld-car --verbose -- --nocapture
