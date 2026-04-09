@@ -26,7 +26,7 @@ jobs:
       run: cargo clippy -- -D warnings
     - name: Run Ipld CAR Lib tests 
       run: |
-      pwd
-      ls -la -R 
-      env
-      cargo test -p ipld-car --verbose -- --nocapture
+        pwd
+        ls -la -R 
+        env
+        cargo test -p ipld-car --verbose -- --nocapture
