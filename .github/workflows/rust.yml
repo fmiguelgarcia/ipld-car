@@ -11,7 +11,6 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
@@ -21,12 +20,14 @@ jobs:
     - name: Check Fmt (nightly)
       run: cargo +nightly fmt --check --verbose
     - name: Build (check)
-      run: cargo check --verbose
+      run: cargo check
     - name: Clippy
       run: cargo clippy -- -D warnings
     - name: Run Ipld CAR Lib tests 
       run: |
         pwd
-        ls -la -R 
-        env
-        cargo test -p ipld-car --verbose -- --nocapture
+        set 
+        git ls-files -s resources/tests/fixtures/*
+        git ls-files -s resources/tests/exp/block_ids/*
+        git ls-files -s resources/tests/exp/roots/*
+        cargo test -p ipld-car  -- --nocapture
