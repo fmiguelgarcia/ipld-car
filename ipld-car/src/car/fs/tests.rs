@@ -54,7 +54,6 @@ where
 	I: IntoIterator<Item = S>,
 	String: From<S>,
 {
-	let _ = pretty_env_logger::try_init()?;
 	let fs = CarFs::from(ContentAddressableArchive::load(test_fixtures_file(name))?);
 
 	let dir_entries = fs.read_dir(dir_path)?.collect::<Vec<_>>();

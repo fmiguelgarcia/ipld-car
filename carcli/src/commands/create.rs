@@ -94,8 +94,6 @@ mod tests {
 
 	#[test]
 	fn test_create() -> anyhow::Result<()> {
-		let _ = pretty_env_logger::try_init();
-
 		let car_path = Path::new("/tmp/carcli_test_create.car");
 		let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("Env variable CARGO_MANIFEST_DIR is missing");
 		let source = Path::new(&cargo_manifest_dir).join("..").join("resources").join("tests");

@@ -17,12 +17,6 @@ jobs:
     - uses: actions/checkout@v5
       with:
         lfs: true
-
-    - name: Failing test with log
-      env:
-          RUST_LOG: trace
-      run: cargo test car::fs::tests::vfs_directory::_4_2_1_simple_directory_c -- --nocapture
-
     - name: Install nightly rustfmt
       run: rustup toolchain install nightly --component rustfmt --profile minimal
     - name: Check Fmt (nightly)
