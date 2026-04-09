@@ -16,9 +16,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
-    - name: Check Fmt
-      run: cargo fmt --check
+    - name: Install nightly rustfmt
+      run: rustup toolchain install nightly --component rustfmt --profile minimal
+    - name: Check Fmt (nightly)
+      run: cargo +nightly fmt --check
     - name: Build (check)
       run: cargo check --verbose
+    - name: Clippy
+      run: cargo clippy -- -D warnings
     - name: Run Ipld CAR Lib tests 
       run: cargo test -p ipld-car --verbose
