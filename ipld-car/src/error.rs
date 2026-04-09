@@ -1,6 +1,6 @@
 use crate::{bounded_reader::error::BoundedReaderErr, ContentAddressableArchive};
 
-use ciborium::{de::Error as CborDeErr, ser::Error as CborSerErr};
+use ciborium::ser::Error as CborSerErr;
 use std::{
 	convert::Infallible,
 	io::{self, IntoInnerError, Read, Seek},
@@ -81,13 +81,6 @@ impl From<Infallible> for Error {
 impl<T> From<IntoInnerError<T>> for Error {
 	fn from(inner_err: IntoInnerError<T>) -> Self {
 		Self::Io(inner_err.into())
-	}
-}
-
-impl From<CborDeErr<io::Error>> for Error {
-	#[inline]
-	fn from(e: CborDeErr<io::Error>) -> Self {
-		Self::Invalid(InvalidErr::CborDec(e))
 	}
 }
 

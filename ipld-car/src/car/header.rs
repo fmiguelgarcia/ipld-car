@@ -5,7 +5,7 @@ use crate::{
 };
 
 use bytes::{BufMut, BytesMut};
-use libipld::Cid;
+use libipld::{multibase, Cid};
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Seek, Write};
 
@@ -27,8 +27,15 @@ impl CarHeader {
 		Self { version: 1, roots: roots.into_iter().map(Into::into).collect() }
 	}
 
-	pub fn load<F: Read + Seek>(reader: &mut F) -> Result<CarHeader> {
+	pub fn load<F: Read + Seek + Clone>(reader: &mut F) -> Result<CarHeader> {
 		let header_len = leb128::read::unsigned(reader).map_err(|_| InvalidErr::HeaderLen)?;
+
+		{
+			let mut buf = Vec::with_capacity(header_len as usize);
+			let read = reader.clone().take(header_len).read_to_end(&mut buf)?;
+			let buf_enc = multibase::encode(multibase::Base::Base16Lower, buf);
+			tracing::debug!("Header ({read}/{header_len}): {buf_enc}");
+		};
 		let mut header_reader = reader.take(header_len);
 		let header: CarHeader = ciborium::de::from_reader(&mut header_reader).map_err(InvalidErr::from)?;
 		ensure!(header.version == 1, NotSupportedErr::Version(header.version));
