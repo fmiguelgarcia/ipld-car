@@ -25,4 +25,5 @@ jobs:
       run: cargo clippy -- -D warnings
     - name: Run Ipld CAR Lib tests 
       run: |
+        cargo --version -vv
         cargo test -p ipld-car --verbose -vv -- --nocapture
