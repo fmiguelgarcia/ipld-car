@@ -15,6 +15,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
+      with:
+        lfs: true
+
     - name: Failing test with log
       env:
           RUST_LOG: trace
@@ -29,6 +32,4 @@ jobs:
     - name: Clippy
       run: cargo clippy -- -D warnings
     - name: Run Ipld CAR Lib tests 
-      run: |
-        cargo --version -vv
-        cargo test -p ipld-car --verbose -vv -- --nocapture
+      run: cargo test -p ipld-car --verbose -vv -- --nocapture
