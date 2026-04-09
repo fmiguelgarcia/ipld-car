@@ -2,6 +2,7 @@ File:            symlink.car
 Blocks:          3
   Roots:         1
   Non-roots:     2
-Total DAG-PB:    127B
+Total CAR:       163B
+Total DAG-PB:    119B
 Total Data:      8B
   [0] QmWvY6FaqFMS89YAQ9NAPjVP4WZKA1qbHbicc9HeSKQTgt

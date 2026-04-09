@@ -1,15 +1,16 @@
 use crate::{
-	arena::{Arena, ArenaId},
-	car::Block,
-	ensure,
+	bounded_reader::{
+		functions::slice_ref,
+		sync::BoundedReader,
+		traits::{Bounded, CloneAndRewind},
+	},
+	car::{Block, BlockId, ContentAddressableArchive},
 	error::{DagPbErr, DagPbResult, UnixFsErr},
-	fail,
-	proto::{self, data::DataType},
-	reader_with_len::ReaderWithLen,
-	BoundedReader, CIDBuilder, Config, ContextLen,
+	fail, proto,
+	traits::ContextLen,
 };
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 use derivative::Derivative;
 use libipld::{
 	pb::{PbLink, PbNode},
@@ -20,66 +21,83 @@ use prost::Message;
 use quick_protobuf::message::MessageWrite;
 use std::{
 	cmp::min,
-	collections::BTreeMap,
 	io::{copy, Read, Seek},
 };
 
-mod directory;
-pub(crate) use directory::Directory;
 mod multi_block_file;
 pub(crate) use multi_block_file::MultiBlockFile;
-mod single_block_file;
-pub(crate) use single_block_file::{SBFContent, SingleBlockFile};
 mod symlink;
-use symlink::Symlink;
+pub use symlink::Symlink;
 mod link;
-pub use link::Link;
+pub use link::{BlockLink, Link, NamedLink};
 
 const BUF_LIMIT: usize = bytes!(2; MiB);
 const BUF_CAPS: &[usize] = &[bytes!(4; KiB), bytes!(16; KiB), bytes!(128; KiB), bytes!(512; KiB), bytes!(1; MiB)];
 
+#[derive(Debug, Clone)]
+pub enum DagPbType {
+	Dir,
+	Symlink(Symlink),
+	SingleBlockFile,
+	MultiBlockFile(MultiBlockFile),
+	MissingBlock(Box<PbLink>),
+}
+
 #[derive(derive_more::Debug, Derivative)]
 #[derivative(Clone(bound = ""))]
-pub enum DagPb<T> {
-	Dir(Directory),
-	SingleBlockFile(SingleBlockFile<T>),
-	MultiBlockFile(MultiBlockFile<T>),
-	Symlink(Symlink),
+pub struct DagPb<T> {
+	pub r#type: DagPbType,
+	pub data: BoundedReader<T>,
+}
+
+impl<T> DagPb<T> {
+	pub fn directory() -> Self {
+		Self::no_data(DagPbType::Dir)
+	}
+
+	pub fn symlink<S: Into<String>>(posix_path: S) -> Self {
+		Self::no_data(DagPbType::Symlink(Symlink::new(posix_path)))
+	}
+
+	#[inline]
+	pub fn single_block_file<D: Into<BoundedReader<T>>>(data: D) -> Self {
+		Self { r#type: DagPbType::SingleBlockFile, data: data.into() }
+	}
+
+	#[inline]
+	pub fn multi_block_file<BS, D>(blocksizes: BS, data: D) -> Self
+	where
+		BS: Into<MultiBlockFile>,
+		D: Into<BoundedReader<T>>,
+	{
+		Self { r#type: DagPbType::MultiBlockFile(blocksizes.into()), data: data.into() }
+	}
+
+	#[inline]
+	pub fn no_data(r#type: DagPbType) -> Self {
+		Self { r#type, data: Default::default() }
+	}
+}
+
+impl<T> From<DagPbType> for DagPb<T> {
+	fn from(r#type: DagPbType) -> Self {
+		Self { r#type, data: ().into() }
+	}
 }
 
 impl<T> ContextLen for DagPb<T> {
 	fn data_len(&self) -> u64 {
-		match self {
-			Self::SingleBlockFile(sbf) => sbf.data_len(),
-			Self::MultiBlockFile(mbf) => mbf.data_len(),
-			Self::Dir(..) | Self::Symlink(..) => 0,
+		match &self.r#type {
+			DagPbType::Dir | DagPbType::MissingBlock(..) | DagPbType::Symlink(..) => 0u64,
+			DagPbType::SingleBlockFile => self.data.bound_len(),
+			DagPbType::MultiBlockFile(mbf) => mbf.block_sizes.iter().sum(),
 		}
 	}
 
-	fn dag_pb_len(&self) -> u64 {
-		match self {
-			Self::SingleBlockFile(sbf) => sbf.dag_pb_len(),
-			Self::MultiBlockFile(mbf) => mbf.dag_pb_len(),
-			Self::Dir(dir) => dir.dag_pb_len(),
-			Self::Symlink(symlink) => symlink.dag_pb_len(),
-		}
-	}
-
-	fn invalidate(&mut self) {
-		match self {
-			Self::SingleBlockFile(sbf) => sbf.invalidate(),
-			Self::MultiBlockFile(mbf) => mbf.invalidate(),
-			Self::Dir(dir) => dir.invalidate(),
-			Self::Symlink(symlink) => symlink.invalidate(),
-		}
-	}
-
-	fn was_invalidated(&self) -> bool {
-		match self {
-			Self::SingleBlockFile(sbf) => sbf.was_invalidated(),
-			Self::MultiBlockFile(mbf) => mbf.was_invalidated(),
-			Self::Dir(dir) => dir.was_invalidated(),
-			Self::Symlink(symlink) => symlink.was_invalidated(),
+	fn pb_data_len(&self) -> u64 {
+		match &self.r#type {
+			DagPbType::SingleBlockFile => 0u64,
+			_ => self.data.bound_len(),
 		}
 	}
 }
@@ -88,27 +106,32 @@ impl<T> ContextLen for DagPb<T> {
 // ===========================================================================
 
 impl<T: Read + Seek> DagPb<T> {
-	pub fn load(arena: &mut Arena<Block<T>>, cid: Cid, mut reader: BoundedReader<T>) -> DagPbResult<ArenaId> {
+	pub fn load(
+		car: &mut ContentAddressableArchive<T>,
+		cid: Cid,
+		mut block_data: BoundedReader<T>,
+	) -> DagPbResult<BlockId> {
 		// Try to decode `PbNode` and rebounds to data.
-		let decode_pb_node_max = reader.bound_len();
-		let pb_node = decode_pb_node(&mut reader, decode_pb_node_max)?;
-		tracing::debug!(?pb_node, "Load pb node");
+		let decode_pb_node_max = block_data.bound_len();
+		let pb_node = decode_pb_node(&mut block_data, decode_pb_node_max)?;
 		let pb_node_len = pb_node.get_size() as u64;
 		debug_assert_eq!(pb_node_len, pb_node.clone().into_bytes().len() as u64);
-
-		let bounded_data = reader.sub(pb_node_len..)?;
+		let pb_data = block_data.sub(..pb_node_len)?;
+		let data = block_data.sub(pb_node_len..)?;
 
 		// Decode Unixfs Data
-		let enc_data = pb_node.data.clone().ok_or(UnixFsErr::MissingData)?;
-		let unixfs = proto::Data::decode(enc_data).map_err(|_| UnixFsErr::InvalidData)?;
-		tracing::debug!(?unixfs, "Load proto Data");
-		let unixfs_type =
-			DataType::try_from(unixfs.r#type).map_err(|_| UnixFsErr::DataTypeNotSupported(unixfs.r#type))?;
+		let pb_node_data_enc = pb_node.data.clone().ok_or(UnixFsErr::MissingData)?;
+		let unixfs = proto::Data::decode(pb_node_data_enc).map_err(|_| UnixFsErr::InvalidData)?;
+
+		let unixfs_type = proto::data::DataType::try_from(unixfs.r#type)
+			.map_err(|_| UnixFsErr::DataTypeNotSupported(unixfs.r#type))?;
+
 		let id = match unixfs_type {
-			DataType::Directory => load_directory(arena, cid, pb_node.links)?,
-			DataType::File => load_file(arena, cid, pb_node, unixfs, bounded_data)?,
-			DataType::Raw => single_block_file(arena, cid, None, bounded_data)?,
-			DataType::Symlink => load_symlink(arena, cid, &pb_node.links, unixfs)?,
+			proto::data::DataType::Directory => load_directory(car, cid, pb_data, &pb_node.links),
+			proto::data::DataType::Symlink => load_symlink(car, cid, pb_data, unixfs)?,
+			proto::data::DataType::Raw =>
+				car.add_block(Block::new_dag_pb(cid, DagPb::single_block_file(data), pb_data)),
+			proto::data::DataType::File => load_file(car, cid, pb_node, unixfs, pb_data, data)?,
 			_ => fail!(UnixFsErr::DataTypeNotSupported(unixfs.r#type)),
 		};
 
@@ -116,98 +139,55 @@ impl<T: Read + Seek> DagPb<T> {
 	}
 }
 
-fn load_symlink<T: Read + Seek>(
-	arena: &mut Arena<Block<T>>,
+fn load_directory<T>(
+	car: &mut ContentAddressableArchive<T>,
 	cid: Cid,
+	pb_data: BoundedReader<T>,
 	links: &[PbLink],
-	unixfs: proto::Data,
-) -> DagPbResult<ArenaId> {
-	ensure!(links.is_empty(), UnixFsErr::SymlinkWithChildren);
+) -> BlockId {
+	let block = Block::new_dag_pb(cid, DagPb::directory(), pb_data);
+	car.add_directory(block, links)
+}
 
+fn load_symlink<T>(
+	car: &mut ContentAddressableArchive<T>,
+	cid: Cid,
+	pb_data: BoundedReader<T>,
+	unixfs: proto::Data,
+) -> DagPbResult<BlockId> {
 	let posix_path = unixfs.data.ok_or(UnixFsErr::MissingSymlinkInfo)?;
 	let posix_path_utf8 = String::try_from(posix_path).map_err(|_| UnixFsErr::SymlinkPathUtf8)?;
-	let block = Block::new(cid, DagPb::Symlink(Symlink::new(posix_path_utf8)));
-	tracing::debug!(?block, "DagPb symlink loaded");
-
-	Ok(arena.push(block, None))
+	let block = Block::new_dag_pb(cid, DagPb::symlink(posix_path_utf8), pb_data);
+	Ok(car.add_block(block))
 }
 
 fn load_file<T: Read + Seek>(
-	arena: &mut Arena<Block<T>>,
+	car: &mut ContentAddressableArchive<T>,
 	cid: Cid,
 	pb_node: PbNode,
 	unixfs: proto::Data,
-	reader: BoundedReader<T>,
-) -> DagPbResult<ArenaId> {
+	pb_data: BoundedReader<T>,
+	data: BoundedReader<T>,
+) -> DagPbResult<BlockId> {
+	// Load as SBF
 	if pb_node.links.is_empty() {
-		return single_block_file(arena, cid, unixfs.data.map(Bytes::from), reader);
+		let embedded_data = unixfs.data.and_then(|data| slice_ref(pb_data.clone_and_rewind(), &data));
+		let data = embedded_data.unwrap_or(data);
+		let sbf = DagPb::single_block_file(data);
+		let block = Block::new_dag_pb(cid, sbf, pb_data);
+		return Ok(car.add_block(block));
 	}
-	ensure!(
-		unixfs.blocksizes.len() == pb_node.links.len(),
-		UnixFsErr::BlocksizesLenDiffLinksLen(unixfs.blocksizes.len(), pb_node.links.len())
-	);
 
-	// Insert this node. Zip with unixfs.blocksizes to populate each Link's blocksize field,
-	// which is needed for data_len() to return the correct total file size.
-	let links = pb_node
-		.links
-		.into_iter()
-		.zip(unixfs.blocksizes)
-		.map(|(pb_link, blocksize)| {
-			let cumulative_dag_size = pb_link.size.unwrap_or_default();
-			Link::new(pb_link.cid, cumulative_dag_size, Some(blocksize), pb_link.name, None).with_arena(arena)
-		})
-		.collect::<Vec<_>>();
-	let mbf = MultiBlockFile::new(links.clone(), reader.clone());
-	let block = Block::new(cid, DagPb::MultiBlockFile(mbf));
-	tracing::debug!(?block, "DagPb file loaded");
-	let id = arena.push(block, None);
-
-	Ok(id)
-}
-
-fn single_block_file<T: Read + Seek>(
-	arena: &mut Arena<Block<T>>,
-	cid: Cid,
-	data: Option<Bytes>,
-	reader: BoundedReader<T>,
-) -> DagPbResult<ArenaId> {
-	let sbf_content = match data {
-		Some(data) => {
-			ensure!(reader.bound_len() == 0, UnixFsErr::FileWithDataAndReader);
-			SBFContent::from(data)
-		},
-		None => SBFContent::from(reader),
-	};
-	let block = Block::new(cid, DagPb::SingleBlockFile(sbf_content.into()));
-	tracing::debug!(?block, "DagPb single block loaded");
-	Ok(arena.push(block, None))
-}
-
-fn load_directory<T: Read + Seek>(
-	arena: &mut Arena<Block<T>>,
-	cid: Cid,
-	pb_links: Vec<PbLink>,
-) -> DagPbResult<ArenaId> {
-	let dir_entries = pb_links
-		.into_iter()
-		.map(|mut pb_link| {
-			let name = pb_link.name.take().ok_or(UnixFsErr::MissingLinkNameInDirectory)?;
-			let link = Link::from(pb_link).with_arena(arena);
-			Ok::<_, DagPbErr>((name, link))
-		})
-		.collect::<Result<BTreeMap<_, _>, _>>()?;
-
-	let block = Block::new(cid, DagPb::Dir(Directory::from(dir_entries)));
-	tracing::debug!(?block, "DagPb directory load");
-	let id = arena.push(block, None);
-	Ok(id)
+	// Load as MBF
+	let mbf = DagPb::multi_block_file(unixfs.blocksizes, data);
+	let block = Block::new_dag_pb(cid, mbf, pb_data);
+	Ok(car.add_multi_block_file(block, &pb_node.links))
 }
 
 /// It tries to decode a `pbNode` using a progressive increase on the buffer capacity, up to 2 `MiB`.
 fn decode_pb_node<R: Read>(reader: &mut R, block_len: u64) -> DagPbResult<PbNode> {
-	let caps = buf_caps(block_len);
-	let init_capacity = caps.first().cloned().expect("At least one buffer len .qed");
+	let caps = buffer_capacities_to_decode_pb_node(block_len);
+	let init_capacity = caps.first().copied().unwrap_or(BUF_LIMIT);
 	let mut buf = BytesMut::with_capacity(init_capacity);
 
 	for cap in caps {
@@ -227,13 +207,13 @@ fn decode_pb_node<R: Read>(reader: &mut R, block_len: u64) -> DagPbResult<PbNode
 		if let Ok(pb_node) = PbNode::from_bytes(freezed_buf.clone()) {
 			return Ok(pb_node);
 		}
-		buf = freezed_buf.try_into_mut().expect("Buffer is unique .qed");
+		buf = freezed_buf.try_into_mut().map_err(|_| DagPbErr::ExceedBufLimitOnDecode)?;
 	}
 
 	Err(DagPbErr::ExceedBufLimitOnDecode)
 }
 
-fn buf_caps(block_len: u64) -> Vec<usize> {
+fn buffer_capacities_to_decode_pb_node(block_len: u64) -> Vec<usize> {
 	let max_buf_cap: usize = min(block_len.try_into().unwrap_or(usize::MAX), BUF_LIMIT);
 	let mut buf_caps: Vec<usize> = BUF_CAPS.to_vec();
 	buf_caps.push(max_buf_cap);
@@ -241,41 +221,4 @@ fn buf_caps(block_len: u64) -> Vec<usize> {
 	buf_caps.sort();
 	buf_caps.retain(|len| *len <= max_buf_cap);
 	buf_caps
-}
-
-// Ipld & CID related
-// ===========================================================================
-
-impl<T> From<&DagPb<T>> for PbNode {
-	fn from(dag: &DagPb<T>) -> Self {
-		match dag {
-			DagPb::Dir(directory) => directory.into(),
-			DagPb::SingleBlockFile(sbf) => sbf.into(),
-			DagPb::Symlink(symlink) => symlink.into(),
-			DagPb::MultiBlockFile(mbf) => mbf.into(),
-		}
-	}
-}
-
-impl<T: Read + Seek + 'static> DagPb<T> {
-	pub fn as_reader_with_len(&self) -> Result<ReaderWithLen, crate::error::Error> {
-		let this = match self {
-			DagPb::Dir(directory) => PbNode::from(directory).into(),
-			DagPb::SingleBlockFile(sbf) => sbf.as_reader_with_len()?,
-			DagPb::Symlink(symlink) => PbNode::from(symlink).into(),
-			DagPb::MultiBlockFile(mbf) => PbNode::from(mbf).into(),
-		};
-		Ok(this)
-	}
-}
-
-impl<T: Read + Seek> CIDBuilder for DagPb<T> {
-	fn cid(&self, config: &Config) -> Result<Cid, crate::error::Error> {
-		match self {
-			Self::Dir(directory) => directory.cid(config),
-			Self::SingleBlockFile(sbf) => sbf.cid(config),
-			Self::Symlink(symlink) => symlink.cid(config),
-			Self::MultiBlockFile(mbf) => mbf.cid(config),
-		}
-	}
 }

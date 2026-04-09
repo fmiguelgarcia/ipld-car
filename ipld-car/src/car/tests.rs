@@ -1,10 +1,12 @@
 use crate::{
+	bounded_reader::traits::CloneAndRewind as _,
 	car::ContentAddressableArchive,
 	test_helpers::{block_ids_test_file, checksum, roots_test_file, test_fixtures_file},
 };
 
 use anyhow::Result;
 use libipld::{multihash::Sha2_256, Cid};
+use petgraph::visit::IntoNodeReferences;
 use std::io::{BufReader, BufWriter, Seek, Write};
 use tempfile::tempfile;
 use test_case::test_case;
@@ -22,7 +24,7 @@ fn load_and_check_cids(name: &str) -> Result<()> {
 	let roots = car.root_cids()?.iter().map(Cid::to_string).collect::<Vec<_>>();
 	assert_eq!(exp_roots, roots);
 
-	let block_ids = car.arena.iter().map(|block| block.cid.unwrap().to_string()).collect::<Vec<_>>();
+	let block_ids = car.dag.node_references().map(|(_id, block)| block.cid.to_string()).collect::<Vec<_>>();
 	assert_eq!(exp_block_ids, block_ids);
 
 	Ok(())

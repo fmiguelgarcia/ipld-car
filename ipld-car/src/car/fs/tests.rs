@@ -1,15 +1,15 @@
 use crate::{
-	car::{block_content::BlockContent, fs::CarFs, ContentAddressableArchive},
+	bounded_reader::sync::BoundedReader,
+	car::{fs::CarFs, ContentAddressableArchive},
 	config::{Config, ConfigBuilder, LeafPolicy},
 	dag_pb::DagPb,
-	fail,
 	test_helpers::test_fixtures_file,
-	BoundedReader,
 };
 
 use anyhow::{anyhow, Result};
 use libipld::{multihash::Code, Cid};
-use std::path::Path;
+use std::{fs::File, path::Path};
+use tempfile::tempfile;
 use test_case::test_case;
 use vfs::FileSystem;
 
@@ -63,21 +63,15 @@ where
 	Ok(())
 }
 
-#[test_case("bafybeigcsevw74ssldzfwhiijzmg7a35lssfmjkuoj2t5qs5u5aztj47tq", ["audio_only.m4a", "chat.txt", "playback.m3u", "zoom_0.mp4"]; "4.2.4 Directory with Missing blocks" )]
-fn vfs_dag_directory<I, S>(name: &str, exp_dir_entries: I) -> Result<()>
-where
-	I: IntoIterator<Item = S>,
-	String: From<S>,
-{
-	let mut arena = Default::default();
+#[test_case("bafybeigcsevw74ssldzfwhiijzmg7a35lssfmjkuoj2t5qs5u5aztj47tq", &["audio_only.m4a", "chat.txt", "playback.m3u", "zoom_0.mp4"]; "4.2.4 Directory with Missing blocks" )]
+fn vfs_dag_directory(name: &str, exp_dir_entries: &[&str]) -> Result<()> {
 	let content = BoundedReader::from_reader(test_fixtures_file(format!("{name}.dag-pb")))?;
+	let mut car = ContentAddressableArchive::base_new(BoundedReader::empty(), Config::default());
 	let cid = name.parse::<Cid>()?;
-	let id = DagPb::load(&mut arena, cid, content)?;
-	let BlockContent::DagPb(ref dag_pb) = arena.get(id).unwrap().content else { fail!(anyhow!("It is not a DagPb")) };
-	let DagPb::Dir(directory) = dag_pb else { fail!(anyhow!("It is not a directory")) };
+	let id = DagPb::load(&mut car, cid, content)?;
+	car.root_ids.push(id);
 
-	let dir_entries = directory.entries().keys().cloned().collect::<Vec<_>>();
-	let exp_dir_entries = exp_dir_entries.into_iter().map(String::from).collect::<Vec<_>>();
+	let dir_entries = car.read_dir(Path::new("/"))?.collect::<Vec<_>>();
 	assert_eq!(dir_entries, exp_dir_entries);
 
 	Ok(())
@@ -126,7 +120,7 @@ where
 #[test_case( ConfigBuilder::default().hash_code(Code::Blake2s256).build().unwrap(), "bafyobzacebxzx4f4amxpvjywriut5uzqpsbo4mkdfmpe7kgixhqqlhtmu5rhw"; "Blake2s256")]
 #[test_case( ConfigBuilder::default().hash_code(Code::Blake3_256).build().unwrap(), "bafyb4igcwu4aknzxeunla7d6swhtgjcpcdpi7hk5twl4ubnlczrqh3gmme"; "Blake3_256")]
 fn empty_dag_pb_directory(config: Config, exp_cid: &str) -> Result<()> {
-	let car = ContentAddressableArchive::new(config)?;
+	let car = ContentAddressableArchive::<File>::new(config)?;
 
 	let root_cid = car.root_cids()?.first().map(Cid::to_string).unwrap_or_default();
 	assert_eq!(&root_cid, exp_cid);
@@ -137,14 +131,13 @@ fn empty_dag_pb_directory(config: Config, exp_cid: &str) -> Result<()> {
 #[test_case( Config::default(), "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku" ; "4.3.1 Empty RAW block" )]
 #[test_case( ConfigBuilder::default().leaf_policy(LeafPolicy::UnixFs).build().unwrap(), "bafybeif7ztnhq65lumvvtr4ekcwd2ifwgm3awq4zfr3srh462rwyinlb4y"; "4.3.1 Empty dag-pb file" )]
 fn empty_file(config: Config, exp_cid: &str) -> Result<()> {
-	const FILE_NAME: &str = "empty.txt";
-	let car = CarFs::from(ContentAddressableArchive::new(config)?);
+	let file_path = Path::new("empty.txt");
 
-	let mut file = car.create_file(FILE_NAME)?;
-	file.flush()?;
-	drop(file);
+	let mut car = ContentAddressableArchive::<File>::new_without_root(config);
+	car.add_file(file_path, tempfile()?)?;
 
-	let file_cid = car.lock()?.path_to_cid(Path::new(FILE_NAME))?.map(|cid| cid.to_string()).unwrap_or_default();
+	let file_cid = car.path_to_cid(file_path).copied().ok_or(anyhow!("Missing path"))?;
+	let file_cid = file_cid.to_string();
 	assert_eq!(file_cid, exp_cid);
 
 	Ok(())

@@ -1,8 +1,7 @@
-use crate::config::{ChunkPolicy, DAGLayout, LeafPolicy};
+use crate::config::DAGLayout;
 #[cfg(feature = "vfs")]
 use crate::error::vfs_err;
 
-use libipld::multihash;
 use thiserror::Error;
 #[cfg(feature = "vfs")]
 use vfs::error::{VfsError, VfsErrorKind};
@@ -14,14 +13,8 @@ pub enum NotSupportedErr {
 	Prefix,
 	#[error("CAR version ({0}) is not supported")]
 	Version(u64),
-	#[error("Chunk policy `{0:?}` is not supported")]
-	ChunkPolicy(ChunkPolicy),
 	#[error("DAG layout `{0:?}` is not supported")]
 	DAGLayout(DAGLayout),
-	#[error("Leaf policy `{0:?}` is not supported")]
-	LeafPolicy(LeafPolicy),
-	#[error("Hasher `{0:?}` is not supported")]
-	Hasher(multihash::Code),
 }
 
 #[cfg(feature = "vfs")]

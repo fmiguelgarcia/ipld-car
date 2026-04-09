@@ -17,28 +17,45 @@
 //!
 //! Reference: <https://ipld.io/specs/transport/car/carv1/>
 use crate::{
-	arena::{Arena, ArenaId},
-	car::block_builder::BlockBuilder,
+	bounded_reader::{
+		sync::BoundedReader,
+		traits::{Bounded as _, CloneAndRewind as _},
+	},
 	config::{CidCodec, Config},
-	dag_pb::{DagPb, Directory},
+	dag_pb::{BlockLink, DagPb, DagPbType, Link, NamedLink},
 	ensure,
-	error::{CidErr, Error, InvalidErr, NotFoundErr, Result},
-	fail, BoundedReader, CIDBuilder, ContextLen,
+	error::{Error, InvalidErr, LoopDetectedErr, NotFoundErr, NotSupportedErr, Result},
+	fail, proto,
+	traits::ContextLen,
 };
 
-use libipld::{pb::PbNode, Cid};
+use bytes::{Buf, Bytes};
+use libipld::{
+	multihash::MultihashDigest,
+	pb::{PbLink, PbNode},
+	Cid,
+};
+use petgraph::{
+	graph::{EdgeReference, Graph, NodeIndex},
+	visit::{Dfs, EdgeRef, Reversed, Walker},
+	Direction,
+};
+use smallvec::{smallvec, SmallVec};
 use std::{
-	collections::VecDeque,
+	collections::{HashMap, HashSet, VecDeque},
 	fs::File,
-	io::{Read, Seek, SeekFrom, Write},
+	io::{copy, BufWriter, Read, Seek, SeekFrom, Write},
+	path::{Component, Path},
 };
 use tempfile::tempfile;
 use tracing::{debug, trace};
 
+mod metadata;
+pub use metadata::{FileType, Metadata};
 mod block;
-pub use block::Block;
+pub use block::{Block, BlockType};
 mod block_builder;
-mod block_content;
+use block_builder::BlockBuilder;
 mod block_def;
 pub(crate) use block_def::BlockDef;
 mod cbor_cid;
@@ -49,219 +66,491 @@ pub(crate) use header::CarHeader;
 #[cfg(test)]
 mod tests;
 
+pub type BlockId = NodeIndex<u32>;
+pub type SmallBlockIds = SmallVec<[BlockId; 1]>;
+static BLOCK_INSERTED_QED: &str = "Block just added .qed";
+
 #[derive(derive_more::Debug)]
-pub struct ContentAddressableArchive<T: Read + Seek> {
-	pub content: BoundedReader<T>,
-	roots: Vec<ArenaId>,
-	arena: Arena<Block<T>>,
+pub struct ContentAddressableArchive<T> {
+	/// Configuration used only to generate consolidation info, like CIDs
 	config: Config,
+
+	/// Inner reader.
+	pub content: BoundedReader<T>,
+
+	/// Blocks DAG
+	pub dag: Graph<Block<T>, Link>,
+
+	/// CAR root IDs.
+	root_ids: SmallBlockIds,
+
+	/// Index block ID by CID.
+	index_by_cid: HashMap<Cid, BlockId>,
+
+	/// On MBF load process, this list stores any link (cid)
+	/// that is referenced but it is not yet loaded.
+	mbf_pending_links: HashMap<Cid, BlockId>,
+
+	/// On loads, it register bytes used by CAR
+	pub car_overhead_byte_counter: u64,
 }
 
-impl ContentAddressableArchive<File> {
-	pub fn new(config: Config) -> Result<Self> {
-		let content = BoundedReader::from_reader(tempfile()?)?;
-		let mut arena = Arena::default();
-		let dir = Directory::default();
-		let root_dir_cid = dir.cid(&config)?;
-		let root_id = arena.push(Block::new(root_dir_cid, DagPb::Dir(dir)), None);
+impl ContentAddressableArchive<BufWriter<File>> {
+	pub fn new_temp(config: Config) -> Result<Self> {
+		let content = BoundedReader::from_reader(BufWriter::new(tempfile()?))?;
 
-		Ok(Self { content, roots: vec![root_id], arena, config })
+		Ok(Self::base_new(content, config))
 	}
 }
 
-impl<T: Read + Seek> ContentAddressableArchive<T> {
-	pub fn add_file(&mut self, name: String, parent_id: ArenaId, parent_path: &Path, reader: T) -> Result<()> {
-		// Create Tree of `reader`.
-		let bounded = BoundedReader::from_reader(reader)?;
-		let block_builder = BlockBuilder::new(bounded, self.config)?;
-		let block = block_builder.build()?;
-		let cid = block.cid.expect("Generated block has CID .qed");
-		let link = Link::new(cid, block.dag_pb_len(), Some(block.data_len()), name.clone(), None);
+impl<T> ContentAddressableArchive<T> {
+	pub fn new_without_root(config: Config) -> Self {
+		Self::base_new(BoundedReader::empty(), config)
+	}
 
-		// Add block (recursivelly to arena).
-		let id = self.arena.push(block, parent_id);
+	fn base_new(content: BoundedReader<T>, config: Config) -> Self {
+		let root_ids = SmallBlockIds::new();
+		let index_by_cid = HashMap::new();
+		let mbf_pending_links = HashMap::new();
+		let dag = Graph::new();
 
-		{
-			let parent = self.arena.get_mut(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
-			parent.push_directory_entry(name, link.with_arena_id(id))?;
+		Self { content, config, dag, index_by_cid, mbf_pending_links, root_ids, car_overhead_byte_counter: 0u64 }
+	}
+
+	pub(crate) fn add_block_without_cid(&mut self, block: Block<T>) -> BlockId {
+		let id = self.dag.add_node(block);
+		let block = self.dag.node_weight(id).expect(BLOCK_INSERTED_QED);
+		debug!(?id, ?block, "Added block without cid");
+		id
+	}
+
+	pub(crate) fn add_block(&mut self, block: Block<T>) -> BlockId {
+		// Check if block is a missing block
+		let id = if let Some(id) = self.index_by_cid.get(&block.cid).copied() {
+			if let Some(pre_block) = self.dag.node_weight_mut(id) {
+				if let Some(DagPbType::MissingBlock(..)) = &pre_block.dag_pb_type() {
+					*pre_block = block
+				}
+			}
+			id
+		} else {
+			self.dag.add_node(block)
+		};
+
+		let (cid, pb_data_len) = {
+			let block = self.dag.node_weight(id).expect(BLOCK_INSERTED_QED);
+			debug!(?id, ?block, "Added block");
+			(block.cid, block.pb_data_len())
+		};
+
+		// Double-check pending link list
+		self.check_mbf_pending_link(id, cid, pb_data_len);
+
+		// Add index by CID
+		self.index_by_cid.insert(cid, id);
+		id
+	}
+
+	pub(crate) fn link_children(&mut self, id: BlockId, children: &[BlockId]) {
+		for child_id in children {
+			let child_pb_len = self.dag.node_weight(*child_id).map(|block| block.pb_data_len()).unwrap_or_default();
+			let link = BlockLink::new(child_pb_len).into();
+			self.dag.add_edge(id, *child_id, link);
+		}
+	}
+
+	fn check_mbf_pending_link(&mut self, id: BlockId, cid: Cid, pb_data_len: u64) {
+		if let Some(parent_id) = self.mbf_pending_links.get(&cid) {
+			let link = BlockLink::new(pb_data_len).into();
+			debug!(?parent_id, cid = cid.to_string(), ?link, "MBF pending link found");
+			self.dag.add_edge(*parent_id, id, link);
+			self.mbf_pending_links.remove(&cid);
+		}
+	}
+
+	pub(crate) fn add_multi_block_file(&mut self, block: Block<T>, links: &[PbLink]) -> BlockId {
+		let dag_pb_len = block.pb_data_len();
+		let id = self.add_block(block);
+
+		for l in links {
+			if let Some(link_id) = self.index_by_cid.get(&l.cid) {
+				let link = BlockLink::new(dag_pb_len).into();
+				self.dag.add_edge(id, *link_id, link);
+			} else {
+				self.mbf_pending_links.insert(l.cid, id);
+			}
 		}
 
-		self.invalidate_cid_on_ancestors(parent_path);
-		Ok(())
+		id
 	}
 
-	pub fn root_cids(&self) -> Result<Vec<Cid>> {
-		let roots = self.roots.clone();
+	pub(crate) fn add_directory(&mut self, block: Block<T>, links: &[PbLink]) -> BlockId {
+		let id = self.add_block(block);
+		tracing::debug!(?links, "Add directory");
 
-		roots
-			.into_iter()
-			.map(|id| {
-				let block = self.arena.get(id).ok_or(NotFoundErr::ArenaId(id))?;
-				let cid = block.cid.expect("Block SHOULD have CID until we add files");
-				Ok(cid)
-			})
-			.collect()
+		for link in links {
+			let link_id = self.index_by_cid.get(&link.cid).copied().unwrap_or_else(|| {
+				let missing_block = Block::new_dag_pb(link.cid, DagPbType::MissingBlock(Box::new(link.clone())), ());
+				self.add_block(missing_block)
+			});
+			let link = NamedLink::new(link.name.clone().unwrap_or_default()).into();
+			self.dag.add_edge(id, link_id, link);
+		}
+
+		id
 	}
 
-	#[inline]
-	pub fn arena(&self) -> &Arena<Block<T>> {
-		&self.arena
-	}
-}
-
-// VFS support
-// ===========================================================================
-
-#[cfg(feature = "vfs")]
-use crate::dag_pb::Link;
-#[cfg(feature = "vfs")]
-use crate::error::NotSupportedErr;
-#[cfg(feature = "vfs")]
-use block_content::BlockContent;
-#[cfg(feature = "vfs")]
-use std::path::{Component, Path};
-#[cfg(feature = "vfs")]
-use vfs::{
-	error::{VfsErrorKind, VfsResult},
-	VfsFileType, VfsMetadata,
-};
-
-#[cfg(feature = "vfs")]
-impl<T: Read + Seek> ContentAddressableArchive<T> {
-	pub fn path_to_block_ids(&self, path: &Path) -> Result<Vec<ArenaId>> {
-		let mut levels = vec![self.roots.clone()];
+	/// Returns the `BlockId`s associated to `path`.
+	///
+	/// Please note that it can be more than one because a CAR can contains multiple roots.
+	fn path_to_block_ids(&self, path: &Path) -> Result<SmallBlockIds> {
+		let not_found_path = || NotFoundErr::Path(path.to_owned());
+		let mut levels = vec![self.root_ids.clone()];
 
 		for path_component in path.components() {
 			match path_component {
 				Component::Normal(os_name) => {
-					let name = os_name.to_str().ok_or(NotFoundErr::Path)?;
+					let name = os_name.to_str().ok_or_else(not_found_path)?;
 
-					let mut new_level = vec![];
-					for block_id in levels.last().ok_or(NotFoundErr::Path)? {
-						let block = self.arena.get(*block_id).expect("Invalid block ID");
-						if let BlockContent::DagPb(DagPb::Dir(dir)) = &block.content {
-							if let Some(link) = dir.entries().get(name).cloned() {
-								let new_block_id = link
-									.arena_id
-									.or_else(|| self.arena.get_id_by_index(&link.cid))
-									.ok_or(NotFoundErr::CidOnDirEntry)?;
-								new_level.push(new_block_id);
-							}
-						}
+					let mut new_level = SmallBlockIds::new();
+					for block_id in levels.last().ok_or_else(not_found_path)? {
+						let mut targets = self
+							.dag
+							.edges_directed(*block_id, Direction::Outgoing)
+							.filter_map(|edge| (edge.weight().name() == Some(name)).then_some(edge.target()))
+							.collect::<SmallBlockIds>();
+						new_level.append(&mut targets);
 					}
+
 					levels.push(new_level)
 				},
 				Component::RootDir | Component::CurDir => {},
 				Component::ParentDir => {
-					levels.pop().ok_or(Error::NotFound(NotFoundErr::Path))?;
+					levels.pop().ok_or_else(not_found_path)?;
 				},
 				Component::Prefix(..) => fail!(NotSupportedErr::Prefix),
 			}
 		}
 
-		levels.pop().ok_or(Error::NotFound(NotFoundErr::Path))
+		levels.pop().ok_or_else(|| not_found_path().into())
 	}
 
-	pub fn path_to_block_id(&self, path: &Path) -> Result<ArenaId> {
-		let found_ids = self.path_to_block_ids(path)?;
-		ensure!(found_ids.len() < 2, Error::more_than_one(found_ids.len(), path));
-		found_ids.first().copied().ok_or_else(|| Error::from(NotFoundErr::Path))
+	/// Returns the  **unique**`BlockId` associated to `path`.
+	///
+	/// If there is more that one `BlockId`, it will fail with an `Error::MoreThanOneMatchOnPath(..)`
+	fn path_to_block_id(&self, path: &Path) -> Result<BlockId> {
+		let ids = self.path_to_block_ids(path)?;
+		ensure!(ids.len() < 2, Error::more_than_one(ids.len(), path));
+		ids.first().copied().ok_or_else(|| Error::NotFound(NotFoundErr::Path(path.to_owned())))
 	}
 
-	pub fn path_to_cid(&self, path: &Path) -> Result<Option<Cid>> {
+	/// Returns the **unique** `Block` associated to `path`
+	fn path_to_block(&self, path: &Path) -> Result<&'_ Block<T>> {
 		let id = self.path_to_block_id(path)?;
-		let cid = self.arena.get(id).and_then(|block| block.cid);
-		Ok(cid)
+		self.dag.node_weight(id).ok_or(NotFoundErr::BlockId(id).into())
 	}
 
-	fn path_to_mut_block(&mut self, path: &Path) -> Result<&'_ mut Block<T>> {
-		let found_id = self.path_to_block_id(path)?;
-		self.arena.get_mut(found_id).ok_or_else(|| Error::from(NotFoundErr::ArenaId(found_id)))
+	pub fn path_to_cid(&self, path: &Path) -> Option<&Cid> {
+		self.path_to_block(path).map(|block| &block.cid).ok()
 	}
 
-	pub(crate) fn path_to_block(&self, path: &Path) -> Result<&'_ Block<T>> {
-		let found_id = self.path_to_block_id(path)?;
-		self.arena.get(found_id).ok_or_else(|| Error::from(NotFoundErr::ArenaId(found_id)))
+	fn outgoing_links(&self, id: BlockId) -> Vec<BlockId> {
+		self.dag.edges_directed(id, Direction::Outgoing).map(|edge| edge.target()).collect()
 	}
 
-	/// Creates a new empty directory at `parent_path/dir_name`.
-	pub fn create_dir(&mut self, parent_path: &Path, dir_name: &str) -> Result<()> {
-		let parent_id = self.path_to_block_id(parent_path)?;
+	fn outgoing_links_as_entries(&self, id: BlockId) -> Vec<PbLink> {
+		let into_pb_link = |edge: EdgeReference<'_, Link>, name: &str| {
+			let target_id = edge.target();
+			let target = self.dag.node_weight(target_id)?;
+			Some(proto::new_pb_link(target.cid, name.to_owned(), None))
+		};
 
-		// Verify the parent is a directory and the name is not already taken.
-		{
-			let parent = self.arena.get(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
-			match &parent.content {
-				BlockContent::DagPb(DagPb::Dir(dir)) =>
-					if dir.entries().contains_key(dir_name) {
-						fail!(InvalidErr::AlreadyExists(dir_name.to_string()));
-					},
-				_ => return Err(Error::invalid_path(parent_path)),
-			}
-		}
+		// Dev: Only `edge` with proper `name`
+		let mut named_links = self
+			.dag
+			.edges_directed(id, Direction::Outgoing)
+			.filter_map(|edge| {
+				let name = edge.weight().name()?;
+				into_pb_link(edge, name)
+			})
+			.collect::<Vec<_>>();
 
-		// Compute the CID of the new empty directory and push it to the arena.
-		// The returned ArenaId is stored in the Link so that path resolution can find this
-		// specific block even when other empty directories share the same CID.
-		let new_dir = Directory::default();
-		let new_dir_cid = new_dir.cid(&self.config)?;
-		let new_dir_pb_len = PbNode::from(&new_dir).into_bytes().len() as u64;
-		let block = Block::new(new_dir_cid, DagPb::Dir(new_dir));
-		tracing::trace!(?block, parent_id, "Directory block added under parent");
-		let new_dir_arena_id = self.arena.push(block, parent_id);
+		// NOTE: Links should be sorted by name, following the IPLD specs.
+		named_links.sort_by(|a, b| {
+			static LINK_WITH_NAME_QED: &str = "Links with `None` as name were filtered previously .qed";
+			let a_name = a.name.as_ref().expect(LINK_WITH_NAME_QED);
+			let b_name = b.name.as_ref().expect(LINK_WITH_NAME_QED);
+			a_name.cmp(b_name)
+		});
+		named_links
+	}
 
-		// Insert a Link to the new directory in the parent and invalidate its CID.
-		let parent = self.arena.get_mut(parent_id).ok_or(NotFoundErr::ArenaId(parent_id))?;
-		match &mut parent.content {
-			BlockContent::DagPb(DagPb::Dir(dir)) => {
-				let link = Link::new(new_dir_cid, new_dir_pb_len, None, dir_name.to_string(), new_dir_arena_id);
-				dir.mut_entries().insert(dir_name.to_string(), link);
+	fn outgoing_links_as_blocks(&self, id: BlockId) -> Vec<PbLink> {
+		self.dag
+			.edges_directed(id, Direction::Outgoing)
+			.filter_map(|edge| {
+				let cum_dag_size = edge.weight().cumulative_dag_size();
+				let target_id = edge.target();
+				let target = self.dag.node_weight(target_id)?;
+				Some(proto::new_pb_link(target.cid, None, cum_dag_size))
+			})
+			.collect::<Vec<_>>()
+	}
 
-				self.invalidate_cid_on_ancestors(parent_path);
-			},
-			_ => unreachable!("already verified above"),
+	pub fn block_count(&self) -> usize {
+		self.dag.node_count()
+	}
+}
+
+impl<T: Read + Seek> ContentAddressableArchive<T> {
+	pub fn new(config: Config) -> Result<Self> {
+		let mut this = Self::new_without_root(config);
+
+		// Add a root folder
+		let root_folder = Block::new_dag_pb(Cid::default(), DagPb::directory(), ());
+		let root_folder_id = this.add_block_without_cid(root_folder);
+		this.rebuild(root_folder_id)?;
+		this.root_ids.push(root_folder_id);
+		Ok(this)
+	}
+
+	/// Recomputes consolidation info (like `CID`) for each block that was marked as dirty,
+	/// then propagates upward through all ancestors.
+	///
+	/// Uses pre-order DFS on the reversed graph so `id` is rebuilt first and ancestors follow
+	/// bottom-up. Cycle-safe: the DFS tracks visited nodes and never re-enters them.
+	fn rebuild_ancestors(&mut self, id: BlockId) -> Result<()> {
+		let rev_dag = Reversed(&self.dag);
+		let ancestors = Dfs::new(&rev_dag, id).iter(&rev_dag).collect::<Vec<_>>();
+
+		for block_id in ancestors {
+			self.rebuild(block_id)?;
 		}
 
 		Ok(())
 	}
 
-	/// Invalidates `parent_path` and all its ancestors.
-	fn invalidate_cid_on_ancestors(&mut self, parent_path: &Path) {
-		let mut maybe_ancestor_path = Some(parent_path);
-		while let Some(ancestor_path) = maybe_ancestor_path.take() {
-			if let Ok(block) = self.path_to_mut_block(ancestor_path) {
-				block.invalidate();
+	fn rebuild(&mut self, id: BlockId) -> Result<()> {
+		let mut hasher = self.config.hasher()?;
+
+		let (cid, dag_pb_data) = {
+			let block = self.dag.node_weight(id).ok_or(NotFoundErr::BlockId(id))?;
+
+			// Remove current CID from indexes
+			self.index_by_cid.remove(&block.cid);
+
+			// Rebuild CID
+			let (cid_codec, dag_pb_data) = match &block.r#type {
+				BlockType::Raw => {
+					let _len = copy(&mut block.data.clone_and_rewind(), &mut hasher)?;
+					(CidCodec::Raw, Bytes::new())
+				},
+				BlockType::DagPb(dag_pb) => {
+					let pb_node = self.as_pb_node(id, dag_pb)?;
+					let dag_pb_data = Bytes::from(pb_node.into_bytes());
+					let _len = copy(&mut dag_pb_data.clone().reader(), &mut hasher)?;
+					(CidCodec::DagPb, dag_pb_data)
+				},
+			};
+
+			let digest = self.config.hash_code.wrap(hasher.finalize())?;
+			let cid = Cid::new_v1(cid_codec as u64, digest);
+			(cid, dag_pb_data)
+		};
+
+		// Calculate the cumulative_dag_size
+		let cumulative_dag_size = self
+			.dag
+			.edges_directed(id, Direction::Incoming)
+			.map(|edge| edge.weight().cumulative_dag_size())
+			.sum();
+		let block_outgoing_edges = self
+			.dag
+			.edges_directed(id, Direction::Outgoing)
+			.filter_map(|edge| match edge.weight() {
+				Link::Block(..) => Some(edge.id()),
+				_ => None,
+			})
+			.collect::<Vec<_>>();
+		for edge_id in block_outgoing_edges {
+			if let Some(Link::Block(block_link)) = self.dag.edge_weight_mut(edge_id) {
+				block_link.cumulative_dag_size = cumulative_dag_size;
 			}
-			maybe_ancestor_path = ancestor_path.parent();
+		}
+
+		// Update Block
+		self.index_by_cid.insert(cid, id);
+		let block = self.dag.node_weight_mut(id).ok_or(NotFoundErr::BlockId(id))?;
+		block.cid = cid;
+		if let BlockType::DagPb(dag_pb) = &mut block.r#type {
+			dag_pb.data = BoundedReader::from(dag_pb_data);
+		}
+		Ok(())
+	}
+
+	fn as_pb_node(&self, block_id: BlockId, dag_pb: &DagPb<T>) -> Result<PbNode> {
+		let pb_node = match &dag_pb.r#type {
+			DagPbType::Dir => {
+				let links = self.outgoing_links_as_entries(block_id);
+				let pb_data: Bytes = proto::Data::new_directory().into();
+				proto::new_pb_node(links, pb_data)
+			},
+			DagPbType::Symlink(s) => {
+				let pb_data: Bytes = proto::Data::new_symlink(s.posix_path.clone()).into();
+				proto::new_pb_node(vec![], pb_data)
+			},
+			DagPbType::SingleBlockFile => {
+				let mut sbf_buf = Vec::with_capacity(dag_pb.data.bound_len() as usize);
+				let _ = dag_pb.data.clone_and_rewind().read_to_end(&mut sbf_buf)?;
+				let pb_data: Bytes = proto::Data::new_file_with_data(sbf_buf).into();
+				proto::new_pb_node(vec![], pb_data)
+			},
+			DagPbType::MultiBlockFile(mbf) => {
+				let links = self.outgoing_links_as_blocks(block_id);
+				let pb_data: Bytes = proto::Data::new_file(mbf.block_sizes.clone()).into();
+				proto::new_pb_node(links, pb_data)
+			},
+			DagPbType::MissingBlock(l) => fail!(InvalidErr::is_a_miss_block(format!("block_id={block_id:?}"), &l.cid)),
+		};
+		Ok(pb_node)
+	}
+}
+
+// File System interface
+// ===========================================================================
+
+impl<T> ContentAddressableArchive<T> {
+	pub fn read_dir(&self, path: &Path) -> Result<impl Iterator<Item = &str>> {
+		let block_id = self.path_to_block_id(path)?;
+		let mut entries = self
+			.dag
+			.edges_directed(block_id, Direction::Outgoing)
+			.filter_map(|edge| edge.weight().name())
+			.collect::<Vec<_>>();
+		entries.sort();
+
+		Ok(entries.into_iter())
+	}
+
+	pub fn open_file(&self, path: &Path) -> Result<BoundedReader<T>> {
+		self.open_file_with_loop_detector(path, smallvec![])
+	}
+
+	fn open_file_with_loop_detector(
+		&self,
+		path: &Path,
+		mut open_block_ids: SmallVec<[BlockId; 1]>,
+	) -> Result<BoundedReader<T>> {
+		let block = self.path_to_block(path)?;
+		match &block.r#type {
+			BlockType::Raw => Ok(block.data.clone_and_rewind()),
+			BlockType::DagPb(dag_pb) => match &dag_pb.r#type {
+				DagPbType::SingleBlockFile => Ok(block.data.clone_and_rewind()),
+				DagPbType::MultiBlockFile(_mbf) => unimplemented!("MBF not implemented yet"),
+				DagPbType::Symlink(symlink) => {
+					let target = path.join(Path::new(&symlink.posix_path));
+					let target_path = target.as_path();
+					check_loop_and_update(&mut open_block_ids, target_path, self.path_to_block_id(target_path)?)?;
+					self.open_file_with_loop_detector(target_path, open_block_ids)
+				},
+				DagPbType::Dir => fail!(InvalidErr::is_a_dir(path)),
+				DagPbType::MissingBlock(pb_link) => fail!(InvalidErr::is_a_miss_block(path, &pb_link.cid)),
+			},
 		}
 	}
 
-	pub(crate) fn metadata_by_ref(&self, block: &Block<T>) -> VfsResult<VfsMetadata> {
-		use crate::ContextLen;
+	pub fn metadata(&self, path: &Path) -> Result<Metadata> {
+		self.metadata_with_loop_detector(path, smallvec![])
+	}
 
-		let meta = match &block.content {
-			BlockContent::Raw(reader) => metadata_new_file(reader.bound_len()),
-			BlockContent::DagPb(dag_pb) => match dag_pb {
-				DagPb::Dir(..) => metadata_new(VfsFileType::Directory, 0),
-				DagPb::SingleBlockFile(sbf) => metadata_new_file(sbf.data_len()),
-				DagPb::MultiBlockFile(mbf) => metadata_new_file(mbf.data_len()),
-				DagPb::Symlink(..) => fail!(VfsErrorKind::NotSupported),
+	fn metadata_with_loop_detector(&self, path: &Path, mut open_block_ids: SmallVec<[BlockId; 1]>) -> Result<Metadata> {
+		let block_id = self.path_to_block_id(path)?;
+		let block = self.dag.node_weight(block_id).ok_or(NotFoundErr::BlockId(block_id))?;
+
+		let meta = match &block.r#type {
+			BlockType::Raw => Metadata::file(block.data.bound_len()),
+			BlockType::DagPb(dag_pb) => match &dag_pb.r#type {
+				DagPbType::SingleBlockFile => Metadata::file(block.data_len()),
+				DagPbType::MultiBlockFile(mbf) => {
+					let acc_len = mbf.block_sizes.iter().sum::<u64>();
+					Metadata::file(acc_len)
+				},
+				DagPbType::Dir => Metadata::directory(),
+				DagPbType::Symlink(symlink) => {
+					let symlink_path = Path::new(&symlink.posix_path);
+					let parent_path = path.parent().unwrap_or(Path::new("/"));
+
+					let target = parent_path.join(symlink_path);
+					let target_path = target.as_path();
+					check_loop_and_update(&mut open_block_ids, target_path, self.path_to_block_id(target_path)?)?;
+					let target_meta = self.metadata_with_loop_detector(target_path, open_block_ids)?;
+					Metadata::symlink(target_meta)
+				},
+				DagPbType::MissingBlock(link) => fail!(InvalidErr::is_a_miss_block(path, &link.cid)),
 			},
 		};
 
 		Ok(meta)
 	}
+
+	pub fn exists(&self, path: &Path) -> bool {
+		self.path_to_block_id(path).ok().is_some()
+	}
 }
 
-#[cfg(feature = "vfs")]
-fn metadata_new(file_type: VfsFileType, len: u64) -> VfsMetadata {
-	VfsMetadata { file_type, len, created: None, modified: None, accessed: None }
-}
+impl<T: Read + Seek> ContentAddressableArchive<T> {
+	/// Creates a new empty directory at `parent_path/dir_name`.
+	pub fn create_dir(&mut self, path: &Path) -> Result<()> {
+		let dir_name = path
+			.file_name()
+			.ok_or_else(|| InvalidErr::file_name(path))?
+			.to_str()
+			.ok_or_else(|| InvalidErr::not_utf8_path(path))?;
+		let parent_path = path.parent().unwrap_or_else(|| Path::new("."));
+		let parent_id = self.path_to_block_id(parent_path)?;
 
-#[cfg(feature = "vfs")]
-#[inline]
-fn metadata_new_file(len: u64) -> VfsMetadata {
-	metadata_new(VfsFileType::File, len)
+		// `dir_name` is not already used.
+		let found_dir_name = self
+			.dag
+			.edges_directed(parent_id, Direction::Outgoing)
+			.find(|edge| edge.weight().name() == Some(dir_name));
+		ensure!(found_dir_name.is_none(), InvalidErr::exists(dir_name));
+
+		let new_dir = Block::new_dag_pb(Cid::default(), DagPb::directory(), ());
+		let new_dir_id = self.add_block(new_dir);
+		self.dag.add_edge(parent_id, new_dir_id, NamedLink::new(dir_name).into());
+		self.rebuild_ancestors(new_dir_id)
+	}
+
+	pub fn add_file(&mut self, path: &Path, reader: T) -> Result<()> {
+		let os_name = path.file_name().ok_or_else(|| NotFoundErr::file_name(path))?;
+		let name = os_name.to_str().ok_or_else(|| InvalidErr::not_utf8_path(os_name))?;
+
+		// Create and add block.
+		let bounded = BoundedReader::from_reader(reader)?;
+		let block_id = BlockBuilder::new(self, bounded)?.build()?;
+
+		if !self.root_ids.is_empty() {
+			let parent_path = path.parent().unwrap_or(Path::new("."));
+			let parent_id = self.path_to_block_id(parent_path)?;
+			self.dag.add_edge(parent_id, block_id, NamedLink::new(name).into());
+			self.rebuild_ancestors(block_id)
+		} else {
+			self.root_ids.push(block_id);
+			self.dag.add_edge(block_id, block_id, NamedLink::new(name).into());
+			Ok(())
+		}
+	}
+
+	pub fn root_cids(&self) -> Result<Vec<Cid>> {
+		self.root_ids
+			.iter()
+			.map(|id| {
+				let block = self.dag.node_weight(*id).ok_or(NotFoundErr::BlockId(*id))?;
+				Ok(block.cid)
+			})
+			.collect()
+	}
 }
 
 // Load functions
@@ -270,43 +559,40 @@ fn metadata_new_file(len: u64) -> VfsMetadata {
 impl<F: Read + Seek> ContentAddressableArchive<F> {
 	pub fn load(reader: F) -> Result<Self> {
 		let mut reader = BoundedReader::from_reader(reader)?;
-		debug!(?reader, "ContentAddressableArchive reader");
+		let mut this = Self::base_new(reader.clone(), Config::default());
+
+		// Load header
 		let header = CarHeader::load(&mut reader)?;
-		trace!(?header, pos = reader.stream_position()?, "Header loaded");
+		this.car_overhead_byte_counter += reader.stream_position()?;
+		trace!(?header, pos = this.car_overhead_byte_counter, "Header loaded");
 
-		// load each block
-		let mut arena = Arena::with_capacity(header.roots.len());
+		// load each blocka
 		while let Some(block_def) = BlockDef::load(&mut reader)? {
+			// Block elements: content & consolidation info from `reader`
 			trace!(?block_def, "BlockDef loaded");
-			let block_reader = reader.sub(block_def.range.clone())?;
-			let cid_codec = block_def.cid.codec();
-			let codec = CidCodec::from_repr(cid_codec).ok_or(CidErr::CodecNotSupported(cid_codec))?;
-			let _id = match codec {
-				CidCodec::Raw => {
-					let block = Block::new(block_def.cid, block_reader);
-					arena.push(block, None)
-				},
-				CidCodec::DagPb => DagPb::load(&mut arena, block_def.cid, block_reader)?,
-				_other => fail!(CidErr::CodecNotSupported(cid_codec)),
-			};
+			this.car_overhead_byte_counter += block_def.car_overhead_byte_counter;
+			let block_data = reader.sub(block_def.range.clone())?;
 
-			debug!(pos = block_def.range.end, "CAR reader moved to next block");
+			// Load block based on its CID.
+			let cid_codec = block_def.cid.codec();
+			let codec = CidCodec::from_repr(cid_codec).ok_or(Error::CodecNotSupported(cid_codec))?;
+			match codec {
+				CidCodec::Raw => this.add_block(Block::new_raw(block_def.cid, block_data)),
+				CidCodec::DagPb => DagPb::load(&mut this, block_def.cid, block_data)?,
+				_other => fail!(Error::CodecNotSupported(cid_codec)),
+			};
 			reader.seek(SeekFrom::Start(block_def.range.end))?;
 		}
 
-		// Get roots IDs.
-		// TODO: Regenerate parent relations recursivelly.
-		let roots = header
+		// Update roots.
+		this.root_ids = header
 			.roots
 			.iter()
-			.filter_map(|cid| {
-				let (idx, _) = arena.iter().enumerate().find(|(_idx, entry)| entry.cid.as_ref() == Some(&cid.0))?;
-				Some(idx)
-			})
-			.collect::<Vec<_>>();
-		ensure!(roots.len() == header.roots.len(), InvalidErr::HeaderLen);
+			.filter_map(|cid| this.index_by_cid.get(&cid.0))
+			.cloned()
+			.collect::<SmallBlockIds>();
 
-		Ok(Self { content: reader, roots, arena, config: Config::default() })
+		Ok(this)
 	}
 }
 
@@ -315,69 +601,124 @@ impl<F: Read + Seek> ContentAddressableArchive<F> {
 
 impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
 	pub fn write<W: Write>(&mut self, writer: &mut W) -> Result<u64> {
-		self.rebuild_invalids()?;
-
 		// Write header
 		let header = CarHeader::new_v1(self.root_cids()?);
 		let header_written = header.write(writer)? as u64;
-		debug!(?header, pos = header_written, "Header written");
+		// debug!(?header, pos = header_written, "Header written");
 
-		// Write root entries.
-		let mut acc_block_written = 0u64;
-		for block in self.arena.iter() {
-			let block_written = block.write(writer)?.checked_add(acc_block_written).ok_or(Error::FileTooLarge)?;
-			acc_block_written = acc_block_written.checked_add(block_written).ok_or(Error::FileTooLarge)?;
-			debug!(?block, acc_block_written, "Block written")
+		// Write blocks in node insertion order, which preserves the original file block order
+		// on round-trips. BFS would visit children in reverse-insertion order due to petgraph's
+		// adjacency list being prepend-only.
+		let mut acc_written = 0u64;
+
+		for id in self.dag.node_indices() {
+			let block = self.dag.node_weight(id).ok_or(NotFoundErr::BlockId(id))?;
+			let cid = block.cid;
+			let written_bytes = match &block.r#type {
+				BlockType::Raw => {
+					let len = block.data.bound_len();
+					write_block(cid, len, &mut block.data.clone_and_rewind(), writer)?
+				},
+				BlockType::DagPb(dag_pb) => {
+					if block.data.bound_len() > 0 {
+						// Pass-through: write the original bytes from the loaded file.
+						let len = block.data.bound_len();
+						write_block(cid, len, &mut block.data.clone_and_rewind(), writer)?
+					} else {
+						// New block (no original bytes): encode from structure.
+						let pb_node = Bytes::from(self.as_pb_node(id, dag_pb)?.into_bytes());
+						let pb_node_len = pb_node.len() as u64;
+						write_block(cid, pb_node_len, &mut pb_node.reader(), writer)?
+					}
+				},
+			};
+			acc_written = acc_written.checked_add(written_bytes).ok_or(Error::FileTooLarge)?;
 		}
 
-		header_written.checked_add(acc_block_written).ok_or(Error::FileTooLarge)
+		header_written.checked_add(acc_written).ok_or(Error::FileTooLarge)
+	}
+}
+
+fn write_block<R: Read, W: Write>(cid: Cid, reader_len: u64, reader: &mut R, w: &mut W) -> Result<u64> {
+	let cid = cid.to_bytes();
+	let section_len = reader_len.checked_add(cid.len() as u64).ok_or(Error::FileTooLarge)?;
+
+	let leb_written = leb128::write::unsigned(w, section_len)? as u64;
+	w.write_all(&cid)?;
+	let copied = copy(reader, w)?;
+
+	copied.checked_add(leb_written + cid.len() as u64).ok_or(Error::FileTooLarge)
+}
+
+impl<T> ContentAddressableArchive<T> {
+	fn traverse_blocks<F>(&self, mut len_fn: F) -> u64
+	where
+		F: FnMut(&Block<T>, BlockId, &mut VecDeque<BlockId>, &HashSet<BlockId>) -> u64,
+	{
+		let mut acc_len = 0u64;
+		let mut closed = HashSet::new();
+		let mut open = VecDeque::from_iter(self.root_ids.iter().copied());
+
+		while let Some(id) = open.pop_front() {
+			let Some(block) = self.dag.node_weight(id) else { continue };
+			let block_len = len_fn(block, id, &mut open, &closed);
+
+			closed.insert(id);
+			acc_len = acc_len.saturating_add(block_len);
+		}
+
+		acc_len
+	}
+}
+
+impl<T> ContextLen for ContentAddressableArchive<T> {
+	fn data_len(&self) -> u64 {
+		self.traverse_blocks(|block, id, open, closed| match &block.r#type {
+			BlockType::Raw => block.data.bound_len(),
+			BlockType::DagPb(dag_pb) => match &dag_pb.r#type {
+				DagPbType::Dir => {
+					for entry_id in self.outgoing_links(id) {
+						if entry_id != id && !open.contains(&entry_id) && !closed.contains(&entry_id) {
+							open.push_back(entry_id);
+						}
+					}
+					0u64
+				},
+				DagPbType::SingleBlockFile => dag_pb.data.bound_len(),
+				DagPbType::MultiBlockFile(mbf) => mbf.block_sizes.iter().sum(),
+				DagPbType::Symlink(..) | DagPbType::MissingBlock(..) => 0u64,
+			},
+		})
 	}
 
-	/// Recomputes CIDs for all directory blocks whose CID has been invalidated (set to `None`),
-	/// processing from highest arena index to lowest so children are finalized before parents.
-	/// After recomputing a block's CID, updates the stale `link.cid` in every parent directory
-	/// entry that points to that block (identified via `link.arena_id`).
-	fn rebuild_invalids(&mut self) -> Result<()> {
-		let mut invalidated_ids = self
-			.arena
-			.iter()
-			.enumerate()
-			.filter_map(|(id, block)| block.cid.is_none().then_some(id))
-			.collect::<VecDeque<_>>();
-
-		while let Some(id) = invalidated_ids.pop_back() {
-			if let Some(block) = self.arena.get_mut(id) {
-				if block.cid.is_none() {
-					let new_cid = block.cid(&self.config)?;
-					block.cid = Some(new_cid);
-					let _ = block;
-
-					// Update parents:
-					// - link.cid of updated entry should be updated too.
-					// - Mark this parent block as invalid, so we could rebuild it later.
-					let parent_ids = self.arena.parent_of(id);
-					for parent_id in parent_ids {
-						if let Some(parent_block) = self.arena.get_mut(parent_id) {
-							if let BlockContent::DagPb(DagPb::Dir(dir)) = &mut parent_block.content {
-								// DEV: Could we have more that one entry pointing to updated block?
-								// Maybe because we could create `symbolic links` to it.
-								for link in dir.mut_entries().values_mut() {
-									if link.arena_id == Some(id) {
-										link.cid = new_cid;
-									}
-								}
-							}
-
-							parent_block.invalidate();
-							if !invalidated_ids.contains(&parent_id) {
-								invalidated_ids.push_front(parent_id);
-							}
+	fn pb_data_len(&self) -> u64 {
+		self.traverse_blocks(|block, id, open, closed| {
+			if let BlockType::DagPb(dag_pb) = &block.r#type {
+				if let DagPbType::Dir = &dag_pb.r#type {
+					for entry_id in self.outgoing_links(id) {
+						if entry_id != id && !open.contains(&entry_id) && !closed.contains(&entry_id) {
+							open.push_back(entry_id);
 						}
 					}
 				}
 			}
-		}
-
-		Ok(())
+			block.data.bound_len()
+		})
 	}
+}
+
+// Tools
+// ===========================================================================
+
+/// Uses `open_block_ids` to track visited block IDs, in order to detect loops during the
+/// resolution of symbolic links.
+fn check_loop_and_update(
+	open_block_ids: &mut SmallVec<[BlockId; 1]>,
+	target_path: &Path,
+	target_id: BlockId,
+) -> Result<()> {
+	ensure!(!open_block_ids.contains(&target_id), LoopDetectedErr::Symlink(target_path.to_owned()));
+
+	open_block_ids.push(target_id);
+	Ok(())
 }

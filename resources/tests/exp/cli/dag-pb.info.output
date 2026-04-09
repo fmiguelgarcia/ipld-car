@@ -2,6 +2,7 @@ File:            dag-pb.car
 Blocks:          4
   Roots:         1
   Non-roots:     3
+Total CAR:       208B
 Total DAG-PB:    184B
 Total Data:      27B
   [0] bafybeiegxwlgmoh2cny7qlolykdf7aq7g6dlommarldrbm7c4hbckhfcke

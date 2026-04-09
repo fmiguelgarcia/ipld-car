@@ -1,4 +1,4 @@
-use crate::error::{CidErr, Error, InvalidErr};
+use crate::error::{Error, InvalidErr};
 
 use derivative::Derivative;
 use derive_builder::Builder;
@@ -80,7 +80,7 @@ impl TryFrom<&Cid> for Config {
 
 	fn try_from(cid: &Cid) -> Result<Self, Self::Error> {
 		let cid_codec_repr = cid.codec();
-		let cid_codec = CidCodec::from_repr(cid_codec_repr).ok_or(CidErr::CodecNotSupported(cid_codec_repr))?;
+		let cid_codec = CidCodec::from_repr(cid_codec_repr).ok_or(Error::CodecNotSupported(cid_codec_repr))?;
 		let hash_codec = multihash::Code::try_from(cid.hash().code())?;
 
 		ConfigBuilder::default()

@@ -1,6 +1,6 @@
 # IPLD-CAR & CLI
 
-A Rust implementation of the [CAR v1](https://ipld.io/specs/transport/car/carv1/) formats (well only _Dag-pb_ at tyhe moment), designed for reading and writing content-addressable archives without external IPFS infrastructure.
+A Rust implementation of the [CAR v1](https://ipld.io/specs/transport/car/carv1/) formats (well only _Dag-pb_ at the moment), designed for reading and writing content-addressable archives without external IPFS infrastructure.
 
 This workspace contains two crates:
 
@@ -13,11 +13,12 @@ This workspace contains two crates:
 
 ### Filesystem interface
 
-`CarFs<T>` wraps a `ContentAddressableArchive` and implements [`vfs::FileSystem`](https://docs.rs/vfs), giving you a familiar, path-based API over the archive contents:
+`CarFs<T>` wraps a `ContentAddressableArchive` and implements [`vfs::FileSystem`](https://docs.rs/vfs), giving you a familiar, path-based API over the archive contents.
 
 ```rust
 use ipld_car::{CarFs, ContentAddressableArchive};
 use vfs::FileSystem;
+use std::fs::File;
 
 let fs = CarFs::from(ContentAddressableArchive::load(File::open("archive.car")?)?);
 
@@ -34,27 +35,33 @@ std::io::copy(&mut reader, &mut std::io::stdout())?;
 You can also build an archive:
 
 ```rust
+use ipld_car::{CarFs, Config, ContentAddressableArchive};
+use vfs::FileSystem;
+use std::{fs::File, io::{BufWriter, Write}};
+
 let fs = CarFs::from(ContentAddressableArchive::new(Config::default())?);
 
 fs.create_dir("/docs")?;
 let mut file = fs.create_file("/docs/readme.txt")?;
 write!(file, "hello")?;
 
-// NOTE: `file` is added to car after `drop`  it.
-drop(file); // commits the block
+// NOTE: the block is committed to the CAR on `drop`.
+drop(file);
 
-// Extract CAR from FS wrapper and write into `output` file.
+// Extract the CAR from the FS wrapper and write to disk.
 let mut car = fs.into_inner().unwrap();
 car.write(&mut BufWriter::new(File::create("out.car")?))?;
 ```
 
 ### Features
 
-| Feature | Default | Description                                              |
-| ------- | ------- | -------------------------------------------------------- |
-| `std`   | ✓       | Standard library support, CBOR header, `vfs`             |
-| `vfs`   | ✓       | `CarFs<T>` and `vfs::FileSystem` impl (enabled by `std`) |
-| `cli`   |         | Exposes `Config` as `clap::Args`                         |
+| Feature        | Default | Description                                              |
+| -------------- | ------- | -------------------------------------------------------- |
+| `std`          | ✓       | Standard library support, CBOR header, `vfs`             |
+| `vfs`          | ✓       | `CarFs<T>` and `vfs::FileSystem` impl (enabled by `std`) |
+| `cli`          |         | Exposes `Config` as `clap::Args`                         |
+| `jumbo-chunks` |         | Enables chunk sizes from 1 MiB up to 512 MiB             |
+| `test_helpers` |         | Exposes test utilities for downstream crates             |
 
 ---
 
@@ -67,6 +74,22 @@ cargo install --path carcli
 ```
 
 ### Commands
+
+#### `info` — archive summary
+
+```bash
+carcli info archive.car
+```
+
+```
+File:            archive.car
+Blocks:          4
+  Roots:         1
+  Non-roots:     3
+Total DAG-PB:    208B
+Total Data:      43B
+  [0] bafybeietjm63oynimmv5yyqay33nui4y4wx6u3peezwetxgiwvfmelutzu
+```
 
 #### `ls` — list directory contents
 
@@ -102,26 +125,21 @@ carcli cat archive.car /data/records.json | jq '.items[]'
 carcli cat archive.car /report.pdf > report.pdf
 ```
 
-#### `info` — archive summary
+#### `create` — pack a directory or file into a CAR file
 
-```bash
-carcli info archive.car
-```
-
-```
-File:            archive.car
-Blocks:          4
-  Roots:         1
-  Non-roots:     3
-Total DAG-PB:    208B
-Total Data:      43B
-  [0] bafybeietjm63oynimmv5yyqay33nui4y4wx6u3peezwetxgiwvfmelutzu
-```
-
-#### `create` — pack a directory into a CAR file
+Recursively adds a local directory or file, preserving the directory structure:
 
 ```bash
 carcli create out.car ./my-directory
+carcli create out.car ./single-file.txt
+```
+
+#### `write` — pack individual files into a CAR file
+
+Adds specific files at explicit destination paths using `DEST=SRC` mappings:
+
+```bash
+carcli write -o out.car --add /docs/readme.txt=./README.md --add /data/a.json=./a.json
 ```
 
 ---

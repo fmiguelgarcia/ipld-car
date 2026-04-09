@@ -1,6 +1,7 @@
-use std::fs::Metadata;
+use ipld_car::car::FileType;
+
+use std::{ffi::os_str::OsStr, fs::Metadata, os::unix::ffi::OsStrExt, path::Path};
 use unit_prefix::NumberPrefix;
-use vfs::VfsFileType;
 
 /// Controls how file sizes are displayed in `ls` output.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -14,19 +15,23 @@ pub enum SizeFormat {
 }
 
 /// Returns a Nerd Font icon character for `name` based on its extension and `file_type`.
-pub fn pick_icon(name: &str, file_type: VfsFileType) -> char {
-	if file_type == VfsFileType::Directory {
-		return '\u{f115}';
-	}
-	let ext = name.rsplit_once('.').map(|(_, e)| e).unwrap_or("").to_ascii_lowercase();
-	match ext.as_str() {
-		"txt" => '\u{f15c}',
-		"md" | "markdown" => '\u{e73e}',
-		"rs" => '\u{e7a8}',
-		"toml" | "json" | "yaml" | "yml" => '\u{e60b}',
-		"pdf" => '\u{f1c1}',
-		"car" => '\u{f187}',
-		_ => '\u{f15b}',
+pub fn pick_icon(name: &Path, file_type: FileType) -> char {
+	match file_type {
+		FileType::Dir => '\u{f115}',
+		FileType::Symlink => '',
+		FileType::File => {
+			let default_ext = OsStr::new("");
+			let ext = name.extension().unwrap_or(default_ext);
+			match ext.as_bytes() {
+				b"txt" => '\u{f15c}',
+				b"md" | b"markdown" => '\u{e73e}',
+				b"rs" => '\u{e7a8}',
+				b"toml" | b"json" | b"yaml" | b"yml" => '\u{e60b}',
+				b"pdf" => '\u{f1c1}',
+				b"car" => '\u{f187}',
+				_ => '\u{f15b}',
+			}
+		},
 	}
 }
 

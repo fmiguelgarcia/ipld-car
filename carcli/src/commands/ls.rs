@@ -1,12 +1,15 @@
 use crate::commands::common::{fmt_size, format_modified_time, pick_icon, SizeFormat};
-use ipld_car::{car::fs::CarFs, ContentAddressableArchive};
+use ipld_car::{car::FileType, ContentAddressableArchive};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::Args;
-use std::{fs::File, path::PathBuf};
+use std::{
+	fs::File,
+	io::BufReader,
+	path::{Path, PathBuf},
+};
 use term_grid::{Direction, Filling, Grid, GridOptions};
 use users::{get_group_by_gid, get_user_by_uid};
-use vfs::{error::VfsErrorKind, FileSystem, VfsFileType};
 
 /// Arguments for the `ls` subcommand.
 #[derive(Args)]
@@ -28,51 +31,54 @@ pub struct SubCmdLs {
 }
 
 impl SubCmdLs {
-	/// Resolves the active [`SizeFormat`] from the mutually-exclusive size flags.
-	fn size_format(&self) -> SizeFormat {
-		if self.bytes {
-			SizeFormat::Bytes
-		} else if self.binary {
-			SizeFormat::Binary
-		} else {
-			SizeFormat::Decimal
-		}
-	}
-
 	/// Runs the `ls` sub-command.
 	pub fn run(&self) -> Result<()> {
 		let (user, group, modified) = get_car_file_info(&self.file)?;
-		let file = File::open(&self.file)?;
-		let fs = CarFs::from(ContentAddressableArchive::load(file)?);
+		let file = BufReader::new(File::open(&self.file)?);
+		let car = ContentAddressableArchive::load(file)?;
 
 		if self.tree {
-			self.print_tree(&fs, &user, &group, &modified)
+			self.print_tree(&car, &user, &group, &modified)
 		} else {
-			self.print_list(&fs, &user, &group, &modified)
+			self.print_list(&car, &user, &group, &modified)
 		}
 	}
 
 	/// Recursively collects all entries with tree connectors and renders a columnar table.
-	fn print_tree(&self, fs: &CarFs<File>, user: &str, group: &str, modified: &str) -> Result<()> {
+	fn print_tree<T>(&self, car: &ContentAddressableArchive<T>, user: &str, group: &str, modified: &str) -> Result<()> {
+		let path = Path::new(&self.path);
 		let mut rows: Vec<(&'static str, String, String)> = Vec::new();
-		collect_tree(fs, &self.path, "", self.size_format(), &mut rows)?;
+		collect_tree(car, path, "", SizeFormat::from(self), &mut rows)?;
 		print_table(build_cells(rows, user, group, modified));
 		Ok(())
 	}
 
 	/// Lists direct children of `self.path` as a flat columnar table.
-	fn print_list(&self, fs: &CarFs<File>, user: &str, group: &str, modified: &str) -> Result<()> {
-		let size_format = self.size_format();
-		let entries: Vec<String> = fs.read_dir(&self.path)?.collect();
+	fn print_list<T>(&self, car: &ContentAddressableArchive<T>, user: &str, group: &str, modified: &str) -> Result<()> {
+		let self_path = Path::new(&self.path);
+		let size_format = SizeFormat::from(self);
+		let entries = car.read_dir(self_path)?.collect::<Vec<_>>();
 		let rows: Vec<(&'static str, String, String)> = entries
 			.iter()
 			.map(|name| {
-				let (file_type, size_str, icon, suffix) = entry_info(fs, &self.path, name, size_format)?;
+				let (file_type, size_str, icon, suffix) = entry_info(car, self_path, Path::new(name), size_format)?;
 				Ok((perms(file_type, suffix), size_str, format!("{icon} {name}{suffix}")))
 			})
 			.collect::<Result<_>>()?;
 		print_table(build_cells(rows, user, group, modified));
 		Ok(())
+	}
+}
+
+impl From<&SubCmdLs> for SizeFormat {
+	fn from(cmd: &SubCmdLs) -> Self {
+		if cmd.bytes {
+			SizeFormat::Bytes
+		} else if cmd.binary {
+			SizeFormat::Binary
+		} else {
+			SizeFormat::Decimal
+		}
 	}
 }
 
@@ -137,58 +143,53 @@ fn print_table(cells: Vec<String>) {
 }
 
 /// Returns a Unix-style permission string derived from the file type and suffix.
-fn perms(file_type: VfsFileType, suffix: &'static str) -> &'static str {
+fn perms(file_type: FileType, suffix: &'static str) -> &'static str {
 	match (file_type, suffix) {
 		(_, "@") => "lr-xr-xr-x",
-		(VfsFileType::Directory, _) => "drwxr-xr-x",
+		(FileType::Dir, _) => "drwxr-xr-x",
 		_ => ".r--r--r--",
 	}
 }
 
 /// Resolves metadata for `name` under `parent`, returning file type, formatted size, icon, and suffix.
 /// Symlinks, which VFS reports as `NotSupported`, are returned with a `"@"` suffix.
-fn entry_info(
-	fs: &CarFs<File>,
-	parent: &str,
-	name: &str,
+fn entry_info<T>(
+	car: &ContentAddressableArchive<T>,
+	parent: &Path,
+	name: &Path,
 	size_format: SizeFormat,
-) -> Result<(VfsFileType, String, char, &'static str)> {
-	let child_path = if parent == "/" { format!("/{name}") } else { format!("{parent}/{name}") };
-	match fs.metadata(&child_path) {
-		Ok(meta) => {
-			let size_str = match meta.file_type {
-				VfsFileType::Directory => "-".to_string(),
-				VfsFileType::File => fmt_size(meta.len, size_format),
-			};
-			let icon = pick_icon(name, meta.file_type);
-			let suffix = if meta.file_type == VfsFileType::Directory { "/" } else { "" };
-			Ok((meta.file_type, size_str, icon, suffix))
-		},
-		Err(e) if matches!(e.kind(), VfsErrorKind::NotSupported) =>
-			Ok((VfsFileType::File, "-".to_string(), '\u{f0c1}', "@")),
-		Err(e) => Err(anyhow!(e)),
-	}
+) -> Result<(FileType, String, char, &'static str)> {
+	let child_path = parent.join(name);
+	let meta = car.metadata(child_path.as_path())?;
+	let size_str = match meta.file_type {
+		FileType::Dir | FileType::Symlink => "-".to_string(),
+		FileType::File => fmt_size(meta.len, size_format),
+	};
+	let icon = pick_icon(name, meta.file_type);
+	let suffix = if meta.file_type == FileType::Dir { "/" } else { "" };
+	Ok((meta.file_type, size_str, icon, suffix))
 }
 
 /// Recursively appends rows to `rows` for all entries under `path`, decorating each
 /// name with tree connector art (`├──` / `└──`) and indentation carried in `prefix`.
-fn collect_tree(
-	fs: &CarFs<File>,
-	path: &str,
+fn collect_tree<T>(
+	car: &ContentAddressableArchive<T>,
+	path: &Path,
 	prefix: &str,
 	size_format: SizeFormat,
 	rows: &mut Vec<(&'static str, String, String)>,
 ) -> Result<()> {
-	let entries: Vec<String> = fs.read_dir(path)?.collect();
+	let entries = car.read_dir(path)?.collect::<Vec<_>>();
 	for (i, name) in entries.iter().enumerate() {
 		let last = i == entries.len() - 1;
 		let connector = if last { "└── " } else { "├── " };
-		let (file_type, size_str, icon, suffix) = entry_info(fs, path, name, size_format)?;
+		let name_path = Path::new(name);
+		let (file_type, size_str, icon, suffix) = entry_info(car, path, name_path, size_format)?;
 		rows.push((perms(file_type, suffix), size_str, format!("{prefix}{connector}{icon} {name}{suffix}")));
-		if file_type == VfsFileType::Directory {
-			let child_path = if path == "/" { format!("/{name}") } else { format!("{path}/{name}") };
+		if file_type == FileType::Dir {
+			let child_path = path.join(name_path);
 			let extension = if last { "    " } else { "│   " };
-			collect_tree(fs, &child_path, &format!("{prefix}{extension}"), size_format, rows)?;
+			collect_tree(car, &child_path, &format!("{prefix}{extension}"), size_format, rows)?;
 		}
 	}
 	Ok(())
