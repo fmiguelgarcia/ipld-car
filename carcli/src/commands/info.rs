@@ -26,16 +26,16 @@ impl SubCmdInfo {
 		let roots = car.root_cids()?;
 		let block_count = car.block_count();
 		let non_roots = block_count.saturating_sub(roots.len());
-		let total_dag_pb_size = car.pb_data_len();
-		let total_data_size = car.data_len();
 		let size_format = SizeFormat::from(self);
 
 		println!("File:            {}", self.file.display());
 		println!("Blocks:          {}", block_count);
 		println!("  Roots:         {}", roots.len());
 		println!("  Non-roots:     {}", non_roots);
-		println!("Total DAG-PB:    {}", fmt_size(total_dag_pb_size, size_format));
-		println!("Total Data:      {}", fmt_size(total_data_size, size_format));
+		println!("Total CAR:       {}", fmt_size(car.car_overhead_byte_counter, size_format));
+
+		println!("Total DAG-PB:    {}", fmt_size(car.pb_data_len(), size_format));
+		println!("Total Data:      {}", fmt_size(car.data_len(), size_format));
 
 		for (i, cid) in roots.iter().enumerate() {
 			println!("  [{i}] {cid}");

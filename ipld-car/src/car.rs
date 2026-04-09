@@ -37,7 +37,7 @@ use libipld::{
 };
 use petgraph::{
 	graph::{EdgeReference, Graph, NodeIndex},
-	visit::EdgeRef,
+	visit::{Dfs, EdgeRef, Reversed, Walker},
 	Direction,
 };
 use smallvec::{smallvec, SmallVec};
@@ -90,6 +90,9 @@ pub struct ContentAddressableArchive<T> {
 	/// On MBF load process, this list stores any link (cid)
 	/// that is referenced but it is not yet loaded.
 	mbf_pending_links: HashMap<Cid, BlockId>,
+
+	/// On loads, it register bytes used by CAR
+	pub car_overhead_byte_counter: u64,
 }
 
 impl ContentAddressableArchive<BufWriter<File>> {
@@ -111,7 +114,7 @@ impl<T> ContentAddressableArchive<T> {
 		let mbf_pending_links = HashMap::new();
 		let dag = Graph::new();
 
-		Self { content, config, dag, index_by_cid, mbf_pending_links, root_ids }
+		Self { content, config, dag, index_by_cid, mbf_pending_links, root_ids, car_overhead_byte_counter: 0u64 }
 	}
 
 	pub(crate) fn add_block_without_cid(&mut self, block: Block<T>) -> BlockId {
@@ -311,23 +314,17 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 		Ok(this)
 	}
 
-	/// Recomputes consolidation info (like `CID`) for each block that was marked as dirty.
+	/// Recomputes consolidation info (like `CID`) for each block that was marked as dirty,
+	/// then propagates upward through all ancestors.
 	///
-	/// As soon as a block is consolidated, all its parents are marked as dirty and added to the
-	/// pending dirty queue.
-	/// # BUG
-	/// - Loops with symbolic links on parents.
+	/// Uses pre-order DFS on the reversed graph so `id` is rebuilt first and ancestors follow
+	/// bottom-up. Cycle-safe: the DFS tracks visited nodes and never re-enters them.
 	fn rebuild_ancestors(&mut self, id: BlockId) -> Result<()> {
-		self.rebuild(id)?;
+		let rev_dag = Reversed(&self.dag);
+		let ancestors = Dfs::new(&rev_dag, id).iter(&rev_dag).collect::<Vec<_>>();
 
-		let parents = self
-			.dag
-			.edges_directed(id, Direction::Incoming)
-			.map(|edge| edge.source())
-			.collect::<SmallBlockIds>();
-
-		for parent in parents {
-			self.rebuild_ancestors(parent)?;
+		for block_id in ancestors {
+			self.rebuild(block_id)?;
 		}
 
 		Ok(())
@@ -566,20 +563,22 @@ impl<F: Read + Seek> ContentAddressableArchive<F> {
 
 		// Load header
 		let header = CarHeader::load(&mut reader)?;
-		trace!(?header, pos = reader.stream_position()?, "Header loaded");
+		this.car_overhead_byte_counter += reader.stream_position()?;
+		trace!(?header, pos = this.car_overhead_byte_counter, "Header loaded");
 
 		// load each blocka
 		while let Some(block_def) = BlockDef::load(&mut reader)? {
 			// Block elements: content & consolidation info from `reader`
 			trace!(?block_def, "BlockDef loaded");
-			let pb_data = reader.sub(block_def.range.clone())?;
+			this.car_overhead_byte_counter += block_def.car_overhead_byte_counter;
+			let block_data = reader.sub(block_def.range.clone())?;
 
 			// Load block based on its CID.
 			let cid_codec = block_def.cid.codec();
 			let codec = CidCodec::from_repr(cid_codec).ok_or(Error::CodecNotSupported(cid_codec))?;
 			match codec {
-				CidCodec::Raw => this.add_block(Block::new_raw(block_def.cid, pb_data)),
-				CidCodec::DagPb => DagPb::load(&mut this, block_def.cid, pb_data)?,
+				CidCodec::Raw => this.add_block(Block::new_raw(block_def.cid, block_data)),
+				CidCodec::DagPb => DagPb::load(&mut this, block_def.cid, block_data)?,
 				_other => fail!(Error::CodecNotSupported(cid_codec)),
 			};
 			reader.seek(SeekFrom::Start(block_def.range.end))?;
@@ -651,30 +650,18 @@ fn write_block<R: Read, W: Write>(cid: Cid, reader_len: u64, reader: &mut R, w: 
 	copied.checked_add(leb_written + cid.len() as u64).ok_or(Error::FileTooLarge)
 }
 
-impl<T> ContextLen for ContentAddressableArchive<T> {
-	fn data_len(&self) -> u64 {
+impl<T> ContentAddressableArchive<T> {
+	fn traverse_blocks<F>(&self, mut len_fn: F) -> u64
+	where
+		F: FnMut(&Block<T>, BlockId, &mut VecDeque<BlockId>, &HashSet<BlockId>) -> u64,
+	{
 		let mut acc_len = 0u64;
 		let mut closed = HashSet::new();
 		let mut open = VecDeque::from_iter(self.root_ids.iter().copied());
 
 		while let Some(id) = open.pop_front() {
 			let Some(block) = self.dag.node_weight(id) else { continue };
-			let block_len = match &block.r#type {
-				BlockType::Raw => block.data.bound_len(),
-				BlockType::DagPb(dag_pb) => match &dag_pb.r#type {
-					DagPbType::Dir => {
-						for entry_id in self.outgoing_links(id) {
-							if entry_id != id && !open.contains(&entry_id) && !closed.contains(&entry_id) {
-								open.push_back(entry_id);
-							}
-						}
-						0u64
-					},
-					DagPbType::SingleBlockFile => dag_pb.data.bound_len(),
-					DagPbType::MultiBlockFile(mbf) => mbf.block_sizes.iter().sum(),
-					DagPbType::Symlink(..) | DagPbType::MissingBlock(..) => 0u64,
-				},
-			};
+			let block_len = len_fn(block, id, &mut open, &closed);
 
 			closed.insert(id);
 			acc_len = acc_len.saturating_add(block_len);
@@ -682,29 +669,41 @@ impl<T> ContextLen for ContentAddressableArchive<T> {
 
 		acc_len
 	}
+}
+
+impl<T> ContextLen for ContentAddressableArchive<T> {
+	fn data_len(&self) -> u64 {
+		self.traverse_blocks(|block, id, open, closed| match &block.r#type {
+			BlockType::Raw => block.data.bound_len(),
+			BlockType::DagPb(dag_pb) => match &dag_pb.r#type {
+				DagPbType::Dir => {
+					for entry_id in self.outgoing_links(id) {
+						if entry_id != id && !open.contains(&entry_id) && !closed.contains(&entry_id) {
+							open.push_back(entry_id);
+						}
+					}
+					0u64
+				},
+				DagPbType::SingleBlockFile => dag_pb.data.bound_len(),
+				DagPbType::MultiBlockFile(mbf) => mbf.block_sizes.iter().sum(),
+				DagPbType::Symlink(..) | DagPbType::MissingBlock(..) => 0u64,
+			},
+		})
+	}
 
 	fn pb_data_len(&self) -> u64 {
-		let mut acc_len = 0u64;
-		let mut closed = HashSet::new();
-		let mut open = VecDeque::from_iter(self.root_ids.iter().copied());
-
-		while let Some(id) = open.pop_front() {
-			let Some(block) = self.dag.node_weight(id) else { continue };
+		self.traverse_blocks(|block, id, open, closed| {
 			if let BlockType::DagPb(dag_pb) = &block.r#type {
 				if let DagPbType::Dir = &dag_pb.r#type {
 					for entry_id in self.outgoing_links(id) {
-						if entry_id != id && !open.contains(&entry_id) && closed.contains(&entry_id) {
+						if entry_id != id && !open.contains(&entry_id) && !closed.contains(&entry_id) {
 							open.push_back(entry_id);
 						}
 					}
 				}
 			}
-
-			closed.insert(id);
-			acc_len = acc_len.saturating_add(block.data.bound_len());
-		}
-
-		acc_len
+			block.data.bound_len()
+		})
 	}
 }
 

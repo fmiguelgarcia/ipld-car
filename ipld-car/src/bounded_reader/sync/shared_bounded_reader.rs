@@ -1,6 +1,6 @@
 use crate::{
 	bounded_reader::{
-		error::BoundedReaderErr,
+		error::BoundedReaderErr as BErr,
 		traits::{Bounded, BoundedIndex, CloneAndRewind},
 	},
 	ensure,
@@ -10,7 +10,7 @@ use derivative::Derivative;
 use std::{
 	cmp::min,
 	io::{self, Read, Seek, SeekFrom},
-	ops::{Range, RangeFrom, RangeFull, RangeInclusive, RangeToInclusive},
+	ops::{Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive},
 	sync::{Arc, Mutex, MutexGuard},
 };
 
@@ -37,8 +37,8 @@ impl<T> SharedBoundedReader<T> {
 	/// # NOTE
 	/// It does NOT check that `range` is valid in `reader`, that will fail during read/seek
 	/// operations.
-	pub fn new(reader: Arc<Mutex<T>>, range: Range<u64>) -> Result<Self, BoundedReaderErr> {
-		ensure!(range.start <= range.end, BoundedReaderErr::InvalidRange);
+	pub fn new(reader: Arc<Mutex<T>>, range: Range<u64>) -> Result<Self, BErr> {
+		ensure!(range.start <= range.end, BErr::invalid_range(range));
 		Ok(Self { reader, start: range.start, end: range.end, curr: 0 })
 	}
 
@@ -99,12 +99,8 @@ impl<T: Seek> SharedBoundedReader<T> {
 	}
 
 	/// Creates a bounded reader covering the entire shared seekable reader.
-	pub fn from_shared_reader(reader: &Arc<Mutex<T>>) -> Result<Self, BoundedReaderErr> {
-		let end = reader
-			.lock()
-			.map_err(|_| BoundedReaderErr::ReaderPoisoned)?
-			.seek(SeekFrom::End(0))
-			.map_err(BoundedReaderErr::Seek)?;
+	pub fn from_shared_reader(reader: &Arc<Mutex<T>>) -> Result<Self, BErr> {
+		let end = reader.lock()?.seek(SeekFrom::End(0))?;
 		Ok(Self { reader: Arc::clone(reader), start: 0, end, curr: 0 })
 	}
 }
@@ -153,7 +149,7 @@ impl<T> Bounded for SharedBoundedReader<T> {
 	}
 
 	/// Creates a new bounded reader that is a sub-range of this one.
-	fn sub<R: BoundedIndex<Self>>(&self, range: R) -> Result<Self, BoundedReaderErr> {
+	fn sub<R: BoundedIndex<Self>>(&self, range: R) -> Result<Self, BErr> {
 		range.get(self)
 	}
 
@@ -169,11 +165,17 @@ impl<T> CloneAndRewind for SharedBoundedReader<T> {
 }
 
 impl<T> BoundedIndex<SharedBoundedReader<T>> for Range<u64> {
-	fn get(self, bounded: &SharedBoundedReader<T>) -> Result<SharedBoundedReader<T>, BoundedReaderErr> {
-		let start = bounded.start.checked_add(self.start).ok_or(BoundedReaderErr::FileTooLarge)?;
-		ensure!(start <= bounded.end, BoundedReaderErr::SubBoundExceedLimits);
-		let end = bounded.start.checked_add(self.end).ok_or(BoundedReaderErr::FileTooLarge)?;
-		ensure!(end <= bounded.end, BoundedReaderErr::SubBoundExceedLimits);
+	fn get(self, bounded: &SharedBoundedReader<T>) -> Result<SharedBoundedReader<T>, BErr> {
+		let start = bounded
+			.start
+			.checked_add(self.start)
+			.ok_or_else(|| BErr::file_too_large(bounded, self.start, self.end))?;
+		ensure!(start <= bounded.end, BErr::sub_start_exceed(bounded, self.start));
+		let end = bounded
+			.start
+			.checked_add(self.end)
+			.ok_or_else(|| BErr::file_too_large(bounded, self.start, self.end))?;
+		ensure!(end <= bounded.end, BErr::sub_end_exceed(bounded, self.end));
 
 		let reader = Arc::clone(&bounded.reader);
 		SharedBoundedReader::new(reader, start..end)
@@ -193,9 +195,10 @@ impl<T> BoundedIndex<SharedBoundedReader<T>> for Range<u64> {
 }
 
 impl<T> BoundedIndex<SharedBoundedReader<T>> for RangeFrom<u64> {
-	fn get(self, bounded: &SharedBoundedReader<T>) -> Result<SharedBoundedReader<T>, BoundedReaderErr> {
-		let start = bounded.start.checked_add(self.start).ok_or(BoundedReaderErr::FileTooLarge)?;
-		ensure!(start <= bounded.end, BoundedReaderErr::SubBoundExceedLimits);
+	fn get(self, bounded: &SharedBoundedReader<T>) -> Result<SharedBoundedReader<T>, BErr> {
+		let start =
+			bounded.start.checked_add(self.start).ok_or_else(|| BErr::file_too_large(bounded, self.start, 0))?;
+		ensure!(start <= bounded.end, BErr::sub_start_exceed(bounded, self.start));
 		let reader = Arc::clone(&bounded.reader);
 		SharedBoundedReader::new(reader, start..bounded.end)
 	}
@@ -211,36 +214,41 @@ impl<T> BoundedIndex<SharedBoundedReader<T>> for RangeFrom<u64> {
 }
 
 impl<T> BoundedIndex<SharedBoundedReader<T>> for RangeInclusive<u64> {
-	fn get(self, bounded: &SharedBoundedReader<T>) -> Result<SharedBoundedReader<T>, BoundedReaderErr> {
-		let (start, inc_end) = self.into_inner();
-		let range = start..(inc_end.checked_add(1).ok_or(BoundedReaderErr::FileTooLarge)?);
-		range.get(bounded)
+	fn get(self, bounded: &SharedBoundedReader<T>) -> Result<SharedBoundedReader<T>, BErr> {
+		let (start, end) = self.into_inner();
+		let inc_end = end.checked_add(1).ok_or_else(|| BErr::file_too_large(bounded, start, end))?;
+		(start..inc_end).get(bounded)
 	}
 
 	fn clamped_get(self, bounded: &SharedBoundedReader<T>) -> SharedBoundedReader<T> {
 		let (start, inc_end) = self.into_inner();
-		let range = start..(inc_end.saturating_add(1));
-		range.clamped_get(bounded)
+		(start..(inc_end.saturating_add(1))).clamped_get(bounded)
+	}
+}
+impl<T> BoundedIndex<SharedBoundedReader<T>> for RangeTo<u64> {
+	fn get(self, bounded: &SharedBoundedReader<T>) -> Result<SharedBoundedReader<T>, BErr> {
+		(0..self.end).get(bounded)
+	}
+
+	fn clamped_get(self, bounded: &SharedBoundedReader<T>) -> SharedBoundedReader<T> {
+		(0..self.end).clamped_get(bounded)
 	}
 }
 
 impl<T> BoundedIndex<SharedBoundedReader<T>> for RangeToInclusive<u64> {
-	fn get(self, bounded: &SharedBoundedReader<T>) -> Result<SharedBoundedReader<T>, BoundedReaderErr> {
-		let end = self.end.checked_add(1).ok_or(BoundedReaderErr::FileTooLarge)?;
-		let range = bounded.start..end;
-		range.get(bounded)
+	fn get(self, bounded: &SharedBoundedReader<T>) -> Result<SharedBoundedReader<T>, BErr> {
+		let end = self.end.checked_add(1).ok_or_else(|| BErr::file_too_large(bounded, 0, self.end))?;
+		(0..end).get(bounded)
 	}
 
 	fn clamped_get(self, bounded: &SharedBoundedReader<T>) -> SharedBoundedReader<T> {
 		let end = self.end.saturating_add(1);
-		let clamped_end = min(end, bounded.end);
-		let range = bounded.start..clamped_end;
-		range.clamped_get(bounded)
+		(0..end).clamped_get(bounded)
 	}
 }
 
 impl<T> BoundedIndex<SharedBoundedReader<T>> for RangeFull {
-	fn get(self, bounded: &SharedBoundedReader<T>) -> Result<SharedBoundedReader<T>, BoundedReaderErr> {
+	fn get(self, bounded: &SharedBoundedReader<T>) -> Result<SharedBoundedReader<T>, BErr> {
 		Ok(self.clamped_get(bounded))
 	}
 

@@ -95,7 +95,10 @@ impl<T> ContextLen for DagPb<T> {
 	}
 
 	fn pb_data_len(&self) -> u64 {
-		self.data.bound_len()
+		match &self.r#type {
+			DagPbType::SingleBlockFile => 0u64,
+			_ => self.data.bound_len(),
+		}
 	}
 }
 
@@ -106,14 +109,15 @@ impl<T: Read + Seek> DagPb<T> {
 	pub fn load(
 		car: &mut ContentAddressableArchive<T>,
 		cid: Cid,
-		mut pb_data: BoundedReader<T>,
+		mut block_data: BoundedReader<T>,
 	) -> DagPbResult<BlockId> {
 		// Try to decode `PbNode` and rebounds to data.
-		let decode_pb_node_max = pb_data.bound_len();
-		let pb_node = decode_pb_node(&mut pb_data, decode_pb_node_max)?;
+		let decode_pb_node_max = block_data.bound_len();
+		let pb_node = decode_pb_node(&mut block_data, decode_pb_node_max)?;
 		let pb_node_len = pb_node.get_size() as u64;
 		debug_assert_eq!(pb_node_len, pb_node.clone().into_bytes().len() as u64);
-		let data = pb_data.sub(pb_node_len..)?;
+		let pb_data = block_data.sub(..pb_node_len)?;
+		let data = block_data.sub(pb_node_len..)?;
 
 		// Decode Unixfs Data
 		let pb_node_data_enc = pb_node.data.clone().ok_or(UnixFsErr::MissingData)?;

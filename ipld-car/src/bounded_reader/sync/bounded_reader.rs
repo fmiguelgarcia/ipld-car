@@ -9,7 +9,7 @@ use bytes::Bytes;
 use derivative::Derivative;
 use std::{
 	io::{self, Read, Seek, SeekFrom},
-	ops::{Range, RangeFrom, RangeFull, RangeInclusive, RangeToInclusive},
+	ops::{Range, RangeFrom, RangeFull, RangeInclusive, RangeTo, RangeToInclusive},
 	sync::{Arc, Mutex},
 };
 
@@ -146,6 +146,22 @@ impl<T> BoundedIndex<BoundedReader<T>> for RangeFrom<u64> {
 	}
 }
 
+impl<T> BoundedIndex<BoundedReader<T>> for RangeTo<u64> {
+	fn get(self, bounded: &BoundedReader<T>) -> Result<BoundedReader<T>, BoundedReaderErr> {
+		match bounded {
+			BoundedReader::Shared(s) => self.get(s).map(BoundedReader::Shared),
+			BoundedReader::Mem(m) => self.get(m).map(BoundedReader::Mem),
+		}
+	}
+
+	fn clamped_get(self, bounded: &BoundedReader<T>) -> BoundedReader<T> {
+		match bounded {
+			BoundedReader::Shared(s) => BoundedReader::Shared(self.clamped_get(s)),
+			BoundedReader::Mem(m) => BoundedReader::Mem(self.clamped_get(m)),
+		}
+	}
+}
+
 impl<T> BoundedIndex<BoundedReader<T>> for RangeInclusive<u64> {
 	fn get(self, bounded: &BoundedReader<T>) -> Result<BoundedReader<T>, BoundedReaderErr> {
 		match bounded {
@@ -201,13 +217,16 @@ mod tests {
 	use std::io::{Cursor, Read};
 	use test_case::test_case;
 
+	const HELLO: &[u8] = b"Hello world";
+	const LOREM_IPSUM: &[u8] = b"Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
+
 	#[allow(unused_parens)]
-	#[test_case( b"Hello world", 0..4 => b"Hell".to_vec(); "From 0 to 4")]
-	#[test_case( b"Hello world", 2..=4 => b"llo".to_vec(); "From 2 to =4")]
-	#[test_case( b"Hello world", ..=4 => b"Hello".to_vec(); "to =4")]
-	#[test_case( b"Hello world", (0..) => b"Hello world".to_vec(); "From 0 to .." )]
-	#[test_case( b"Hello world", (6..) => b"world".to_vec(); "From 5 to .." )]
-	#[test_case( b"Hello world", (..) => b"Hello world".to_vec(); "full range" )]
+	#[test_case( HELLO, 0..4 => b"Hell".to_vec(); "From 0 to 4")]
+	#[test_case( HELLO, 2..=4 => b"llo".to_vec(); "From 2 to =4")]
+	#[test_case( HELLO, ..=4 => b"Hello".to_vec(); "to =4")]
+	#[test_case( HELLO, (0..) => b"Hello world".to_vec(); "From 0 to .." )]
+	#[test_case( HELLO, (6..) => b"world".to_vec(); "From 5 to .." )]
+	#[test_case( HELLO, (..) => b"Hello world".to_vec(); "full range" )]
 	fn bounded_index_as_shared<D, R>(data: D, range: R) -> Vec<u8>
 	where
 		D: AsRef<[u8]>,
@@ -219,5 +238,26 @@ mod tests {
 		let mut sub_content = vec![];
 		let _ = sub.read_to_end(&mut sub_content).unwrap();
 		sub_content
+	}
+
+	#[test_case( LOREM_IPSUM, &[(28..55),(12..22)] => b"adipiscing".to_vec(); "Nested (27..55)(12..22)" )]
+	#[test_case( LOREM_IPSUM, &[(28..55),(0..11)] => b"consectetur".to_vec(); "Nested (27..55)(0..11)" )]
+	#[test_case( LOREM_IPSUM, &[28..=55,23..=26] => b"elit".to_vec(); "Nested 27..=55 23..=26" )]
+	#[test_case( LOREM_IPSUM, &[..=55, ..=4] => b"Lorem".to_vec(); "Nested ..=55 ..=4" )]
+	#[test_case( LOREM_IPSUM, &[(28..), (88..)] => b"aliqua.".to_vec(); "Nested (28..) (88..)" )]
+	#[test_case( LOREM_IPSUM, &[(..), (..)] => LOREM_IPSUM.to_vec(); "Nested (..) (..)" )]
+	fn nested_bounded_index_as_shared<D, R>(data: D, nested_ranges: &[R]) -> Vec<u8>
+	where
+		D: AsRef<[u8]>,
+		R: BoundedIndex<BoundedReader<Cursor<D>>> + Clone,
+	{
+		let mut bounded = BoundedReader::from_reader(Cursor::new(data)).unwrap();
+		for range in nested_ranges {
+			bounded = bounded.sub(range.clone()).unwrap();
+		}
+
+		let mut content = vec![];
+		let _ = bounded.read_to_end(&mut content).unwrap();
+		content
 	}
 }
