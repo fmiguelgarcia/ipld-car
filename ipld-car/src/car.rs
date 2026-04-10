@@ -18,7 +18,7 @@
 //! Reference: <https://ipld.io/specs/transport/car/carv1/>
 use crate::{
 	bounded_reader::{
-		sync::BoundedReader,
+		sync::{BoundedReader, ChainedBoundedReader},
 		traits::{Bounded as _, CloneAndRewind as _},
 	},
 	config::{CidCodec, Config},
@@ -45,7 +45,7 @@ use std::{
 	collections::{HashMap, HashSet, VecDeque},
 	fs::File,
 	io::{copy, BufWriter, Read, Seek, SeekFrom, Write},
-	path::{Component, Path},
+	path::{Component, Path, PathBuf},
 };
 use tempfile::tempfile;
 use tracing::{debug, trace};
@@ -441,22 +441,49 @@ impl<T> ContentAddressableArchive<T> {
 		path: &Path,
 		mut open_block_ids: SmallVec<[BlockId; 1]>,
 	) -> Result<BoundedReader<T>> {
-		let block = self.path_to_block(path)?;
+		let id = self.path_to_block_id(path)?;
+		let block = self.dag.node_weight(id).ok_or(NotFoundErr::BlockId(id))?;
 		match &block.r#type {
 			BlockType::Raw => Ok(block.data.clone_and_rewind()),
 			BlockType::DagPb(dag_pb) => match &dag_pb.r#type {
-				DagPbType::SingleBlockFile => Ok(block.data.clone_and_rewind()),
-				DagPbType::MultiBlockFile(_mbf) => unimplemented!("MBF not implemented yet"),
+				DagPbType::SingleBlockFile => Ok(dag_pb.data.clone_and_rewind()),
+				DagPbType::MultiBlockFile(_mbf) => Ok(self.open_multi_block_file(id)),
 				DagPbType::Symlink(symlink) => {
-					let target = path.join(Path::new(&symlink.posix_path));
-					let target_path = target.as_path();
-					check_loop_and_update(&mut open_block_ids, target_path, self.path_to_block_id(target_path)?)?;
-					self.open_file_with_loop_detector(target_path, open_block_ids)
+					check_loop_and_update(&mut open_block_ids, path, id)?;
+					let target_abs_path = self.resolve_open_symlink(path, Path::new(&symlink.posix_path));
+					self.open_file_with_loop_detector(&target_abs_path, open_block_ids)
 				},
 				DagPbType::Dir => fail!(InvalidErr::is_a_dir(path)),
 				DagPbType::MissingBlock(pb_link) => fail!(InvalidErr::is_a_miss_block(path, &pb_link.cid)),
 			},
 		}
+	}
+
+	fn resolve_open_symlink(&self, link_path: &Path, target_path: &Path) -> PathBuf {
+		if target_path.is_absolute() {
+			return target_path.to_path_buf();
+		}
+
+		let root = Path::new("/");
+		let mut link_path_parent = link_path.parent().unwrap_or(root);
+		if link_path_parent.as_os_str().is_empty() {
+			link_path_parent = root;
+		}
+
+		link_path_parent.join(target_path)
+	}
+
+	fn open_multi_block_file(&self, id: BlockId) -> BoundedReader<T> {
+		let dfs = Dfs::new(&self.dag, id);
+		let part_readers = dfs
+			.iter(&self.dag)
+			.filter_map(|child_id| {
+				let child = self.dag.node_weight(child_id)?;
+				child.as_sfb_data()
+			})
+			.collect::<Vec<_>>();
+
+		ChainedBoundedReader::new(part_readers).into()
 	}
 
 	pub fn metadata(&self, path: &Path) -> Result<Metadata> {
@@ -477,14 +504,10 @@ impl<T> ContentAddressableArchive<T> {
 				},
 				DagPbType::Dir => Metadata::directory(),
 				DagPbType::Symlink(symlink) => {
-					let symlink_path = Path::new(&symlink.posix_path);
-					let parent_path = path.parent().unwrap_or(Path::new("/"));
-
-					let target = parent_path.join(symlink_path);
-					let target_path = target.as_path();
-					check_loop_and_update(&mut open_block_ids, target_path, self.path_to_block_id(target_path)?)?;
-					let target_meta = self.metadata_with_loop_detector(target_path, open_block_ids)?;
-					Metadata::symlink(target_meta)
+					check_loop_and_update(&mut open_block_ids, path, block_id)?;
+					let target_abs_path = self.resolve_open_symlink(path, Path::new(&symlink.posix_path));
+					let target_meta = self.metadata_with_loop_detector(&target_abs_path, open_block_ids)?;
+					Metadata::symlink(target_meta, Path::new(&symlink.posix_path))
 				},
 				DagPbType::MissingBlock(link) => fail!(InvalidErr::is_a_miss_block(path, &link.cid)),
 			},

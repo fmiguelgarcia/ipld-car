@@ -77,6 +77,13 @@ impl<T> DagPb<T> {
 	pub fn no_data(r#type: DagPbType) -> Self {
 		Self { r#type, data: Default::default() }
 	}
+
+	pub fn as_sfb_data(&self) -> Option<BoundedReader<T>> {
+		match &self.r#type {
+			DagPbType::SingleBlockFile => Some(self.data.clone_and_rewind()),
+			_ => None,
+		}
+	}
 }
 
 impl<T> From<DagPbType> for DagPb<T> {
