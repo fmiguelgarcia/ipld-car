@@ -1,3 +1,3 @@
 Permissions  Size  User    Group   Date Modified         Name
-.r--r--r--   -     {{user}}  {{group}}  {{date_modified}}   bar
+lr-xr-xr-x   -     {{user}}  {{group}}  {{date_modified}}   bar@ -> foo
 .r--r--r--   8B    {{user}}  {{group}}  {{date_modified}}   foo
