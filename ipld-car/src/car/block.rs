@@ -1,5 +1,8 @@
 use crate::{
-	bounded_reader::{sync::BoundedReader, traits::Bounded},
+	bounded_reader::{
+		sync::BoundedReader,
+		traits::{Bounded, CloneAndRewind},
+	},
 	dag_pb::{DagPb, DagPbType},
 	traits::ContextLen,
 };
@@ -42,6 +45,13 @@ impl<T> Block<T> {
 		match &self.r#type {
 			BlockType::Raw => None,
 			BlockType::DagPb(dag) => Some(&dag.r#type),
+		}
+	}
+
+	pub fn as_sfb_data(&self) -> Option<BoundedReader<T>> {
+		match &self.r#type {
+			BlockType::Raw => Some(self.data.clone_and_rewind()),
+			BlockType::DagPb(dag) => dag.as_sfb_data(),
 		}
 	}
 }

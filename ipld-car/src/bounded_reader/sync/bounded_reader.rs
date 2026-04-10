@@ -1,7 +1,7 @@
 use crate::bounded_reader::{
 	error::BoundedReaderErr,
 	mem_bounded_reader::MemBoundedReader,
-	sync::shared_bounded_reader::SharedBoundedReader,
+	sync::{shared_bounded_reader::SharedBoundedReader, ChainedBoundedReader},
 	traits::{Bounded, BoundedIndex, CloneAndRewind},
 };
 
@@ -18,6 +18,7 @@ use std::{
 pub enum BoundedReader<T> {
 	Shared(SharedBoundedReader<T>),
 	Mem(MemBoundedReader),
+	Chained(ChainedBoundedReader<T>),
 }
 
 impl<T> BoundedReader<T> {
@@ -54,6 +55,12 @@ impl<T> From<()> for BoundedReader<T> {
 	}
 }
 
+impl<T> From<ChainedBoundedReader<T>> for BoundedReader<T> {
+	fn from(c: ChainedBoundedReader<T>) -> Self {
+		Self::Chained(c)
+	}
+}
+
 impl<T> Default for BoundedReader<T> {
 	fn default() -> Self {
 		Self::empty()
@@ -66,6 +73,7 @@ impl<T> Bounded for BoundedReader<T> {
 		match self {
 			Self::Shared(s) => s.bounds(),
 			Self::Mem(m) => m.bounds(),
+			Self::Chained(c) => c.bounds(),
 		}
 	}
 
@@ -74,6 +82,7 @@ impl<T> Bounded for BoundedReader<T> {
 		match self {
 			Self::Shared(s) => s.bound_len(),
 			Self::Mem(m) => m.bound_len(),
+			Self::Chained(c) => c.bound_len(),
 		}
 	}
 
@@ -92,6 +101,7 @@ impl<T: Read + Seek> Read for BoundedReader<T> {
 		match self {
 			Self::Shared(s) => s.read(buf),
 			Self::Mem(m) => m.read(buf),
+			Self::Chained(c) => c.read(buf),
 		}
 	}
 }
@@ -101,6 +111,7 @@ impl<T> CloneAndRewind for BoundedReader<T> {
 		match self {
 			Self::Shared(s) => Self::Shared(s.clone_and_rewind()),
 			Self::Mem(m) => Self::Mem(m.clone_and_rewind()),
+			Self::Chained(c) => Self::Chained(c.clone_and_rewind()),
 		}
 	}
 }
@@ -110,6 +121,7 @@ impl<T: Seek> Seek for BoundedReader<T> {
 		match self {
 			Self::Shared(s) => s.seek(pos),
 			Self::Mem(m) => m.seek(pos),
+			Self::Chained(c) => c.seek(pos),
 		}
 	}
 }
@@ -119,6 +131,7 @@ impl<T> BoundedIndex<BoundedReader<T>> for Range<u64> {
 		match bounded {
 			BoundedReader::Shared(s) => self.get(s).map(BoundedReader::Shared),
 			BoundedReader::Mem(m) => self.get(m).map(BoundedReader::Mem),
+			BoundedReader::Chained(c) => self.get(c).map(BoundedReader::Chained),
 		}
 	}
 
@@ -126,6 +139,7 @@ impl<T> BoundedIndex<BoundedReader<T>> for Range<u64> {
 		match bounded {
 			BoundedReader::Shared(s) => BoundedReader::Shared(self.clamped_get(s)),
 			BoundedReader::Mem(m) => BoundedReader::Mem(self.clamped_get(m)),
+			BoundedReader::Chained(c) => BoundedReader::Chained(self.clamped_get(c)),
 		}
 	}
 }
@@ -135,6 +149,7 @@ impl<T> BoundedIndex<BoundedReader<T>> for RangeFrom<u64> {
 		match bounded {
 			BoundedReader::Shared(s) => self.get(s).map(BoundedReader::Shared),
 			BoundedReader::Mem(m) => self.get(m).map(BoundedReader::Mem),
+			BoundedReader::Chained(c) => self.get(c).map(BoundedReader::Chained),
 		}
 	}
 
@@ -142,6 +157,7 @@ impl<T> BoundedIndex<BoundedReader<T>> for RangeFrom<u64> {
 		match bounded {
 			BoundedReader::Shared(s) => BoundedReader::Shared(self.clamped_get(s)),
 			BoundedReader::Mem(m) => BoundedReader::Mem(self.clamped_get(m)),
+			BoundedReader::Chained(c) => BoundedReader::Chained(self.clamped_get(c)),
 		}
 	}
 }
@@ -151,6 +167,7 @@ impl<T> BoundedIndex<BoundedReader<T>> for RangeTo<u64> {
 		match bounded {
 			BoundedReader::Shared(s) => self.get(s).map(BoundedReader::Shared),
 			BoundedReader::Mem(m) => self.get(m).map(BoundedReader::Mem),
+			BoundedReader::Chained(c) => self.get(c).map(BoundedReader::Chained),
 		}
 	}
 
@@ -158,6 +175,7 @@ impl<T> BoundedIndex<BoundedReader<T>> for RangeTo<u64> {
 		match bounded {
 			BoundedReader::Shared(s) => BoundedReader::Shared(self.clamped_get(s)),
 			BoundedReader::Mem(m) => BoundedReader::Mem(self.clamped_get(m)),
+			BoundedReader::Chained(c) => BoundedReader::Chained(self.clamped_get(c)),
 		}
 	}
 }
@@ -167,6 +185,7 @@ impl<T> BoundedIndex<BoundedReader<T>> for RangeInclusive<u64> {
 		match bounded {
 			BoundedReader::Shared(s) => self.get(s).map(BoundedReader::Shared),
 			BoundedReader::Mem(m) => self.get(m).map(BoundedReader::Mem),
+			BoundedReader::Chained(c) => self.get(c).map(BoundedReader::Chained),
 		}
 	}
 
@@ -174,6 +193,7 @@ impl<T> BoundedIndex<BoundedReader<T>> for RangeInclusive<u64> {
 		match bounded {
 			BoundedReader::Shared(s) => BoundedReader::Shared(self.clamped_get(s)),
 			BoundedReader::Mem(m) => BoundedReader::Mem(self.clamped_get(m)),
+			BoundedReader::Chained(c) => BoundedReader::Chained(self.clamped_get(c)),
 		}
 	}
 }
@@ -183,6 +203,7 @@ impl<T> BoundedIndex<BoundedReader<T>> for RangeToInclusive<u64> {
 		match bounded {
 			BoundedReader::Shared(s) => self.get(s).map(BoundedReader::Shared),
 			BoundedReader::Mem(m) => self.get(m).map(BoundedReader::Mem),
+			BoundedReader::Chained(c) => self.get(c).map(BoundedReader::Chained),
 		}
 	}
 
@@ -190,6 +211,7 @@ impl<T> BoundedIndex<BoundedReader<T>> for RangeToInclusive<u64> {
 		match bounded {
 			BoundedReader::Shared(s) => BoundedReader::Shared(self.clamped_get(s)),
 			BoundedReader::Mem(m) => BoundedReader::Mem(self.clamped_get(m)),
+			BoundedReader::Chained(c) => BoundedReader::Chained(self.clamped_get(c)),
 		}
 	}
 }
@@ -199,6 +221,7 @@ impl<T> BoundedIndex<BoundedReader<T>> for RangeFull {
 		match bounded {
 			BoundedReader::Shared(s) => self.get(s).map(BoundedReader::Shared),
 			BoundedReader::Mem(m) => self.get(m).map(BoundedReader::Mem),
+			BoundedReader::Chained(c) => self.get(c).map(BoundedReader::Chained),
 		}
 	}
 
@@ -206,6 +229,7 @@ impl<T> BoundedIndex<BoundedReader<T>> for RangeFull {
 		match bounded {
 			BoundedReader::Shared(s) => BoundedReader::Shared(self.clamped_get(s)),
 			BoundedReader::Mem(m) => BoundedReader::Mem(self.clamped_get(m)),
+			BoundedReader::Chained(c) => BoundedReader::Chained(self.clamped_get(c)),
 		}
 	}
 }

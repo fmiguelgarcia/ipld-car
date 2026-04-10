@@ -1,9 +1,12 @@
-use ipld_car::{car::fs::CarFs, ContentAddressableArchive};
+use ipld_car::ContentAddressableArchive;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::Args;
-use std::{fs::File, io::copy, path::PathBuf};
-use vfs::FileSystem;
+use std::{
+	fs::File,
+	io::{copy, BufReader},
+	path::{Path, PathBuf},
+};
 
 /// Arguments for the `cat` subcommand.
 #[derive(Args)]
@@ -17,10 +20,10 @@ pub struct SubCmdCat {
 impl SubCmdCat {
 	/// Reads the file at `self.path`, and streams it to stdout.
 	pub fn run(&self) -> Result<()> {
-		let file = File::open(&self.file)?;
-		let fs = CarFs::from(ContentAddressableArchive::load(file)?);
+		let file = BufReader::new(File::open(&self.file)?);
+		let car = ContentAddressableArchive::load(file)?;
 
-		let mut reader = fs.open_file(&self.path).map_err(|e| anyhow!("Cannot open file: {e}"))?;
+		let mut reader = car.open_file(Path::new(&self.path))?;
 		let mut stdout = std::io::stdout().lock();
 		copy(&mut reader, &mut stdout)?;
 

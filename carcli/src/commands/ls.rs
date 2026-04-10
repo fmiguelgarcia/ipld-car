@@ -62,7 +62,7 @@ impl SubCmdLs {
 			.iter()
 			.map(|name| {
 				let (file_type, size_str, icon, suffix) = entry_info(car, self_path, Path::new(name), size_format)?;
-				Ok((perms(file_type, suffix), size_str, format!("{icon} {name}{suffix}")))
+				Ok((perms(file_type), size_str, format!("{icon} {name}{suffix}")))
 			})
 			.collect::<Result<_>>()?;
 		print_table(build_cells(rows, user, group, modified));
@@ -143,11 +143,11 @@ fn print_table(cells: Vec<String>) {
 }
 
 /// Returns a Unix-style permission string derived from the file type and suffix.
-fn perms(file_type: FileType, suffix: &'static str) -> &'static str {
-	match (file_type, suffix) {
-		(_, "@") => "lr-xr-xr-x",
-		(FileType::Dir, _) => "drwxr-xr-x",
-		_ => ".r--r--r--",
+fn perms(file_type: FileType) -> &'static str {
+	match file_type {
+		FileType::Symlink => "lr-xr-xr-x",
+		FileType::Dir => "drwxr-xr-x",
+		FileType::File => ".r--r--r--",
 	}
 }
 
@@ -158,15 +158,18 @@ fn entry_info<T>(
 	parent: &Path,
 	name: &Path,
 	size_format: SizeFormat,
-) -> Result<(FileType, String, char, &'static str)> {
+) -> Result<(FileType, String, char, String)> {
 	let child_path = parent.join(name);
 	let meta = car.metadata(child_path.as_path())?;
-	let size_str = match meta.file_type {
-		FileType::Dir | FileType::Symlink => "-".to_string(),
-		FileType::File => fmt_size(meta.len, size_format),
+	let (size_str, suffix) = match meta.file_type {
+		FileType::Dir => ("-".to_string(), "/".to_string()),
+		FileType::Symlink => {
+			let target_link = meta.target_path.as_ref().map(|p| p.as_os_str().to_string_lossy()).unwrap_or_default();
+			("-".to_string(), format!("@ -> {target_link}"))
+		},
+		FileType::File => (fmt_size(meta.len, size_format), "".to_string()),
 	};
 	let icon = pick_icon(name, meta.file_type);
-	let suffix = if meta.file_type == FileType::Dir { "/" } else { "" };
 	Ok((meta.file_type, size_str, icon, suffix))
 }
 
@@ -185,7 +188,7 @@ fn collect_tree<T>(
 		let connector = if last { "└── " } else { "├── " };
 		let name_path = Path::new(name);
 		let (file_type, size_str, icon, suffix) = entry_info(car, path, name_path, size_format)?;
-		rows.push((perms(file_type, suffix), size_str, format!("{prefix}{connector}{icon} {name}{suffix}")));
+		rows.push((perms(file_type), size_str, format!("{prefix}{connector}{icon} {name}{suffix}")));
 		if file_type == FileType::Dir {
 			let child_path = path.join(name_path);
 			let extension = if last { "    " } else { "│   " };

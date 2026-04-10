@@ -59,12 +59,13 @@ fn car_file_owner(_car_file: &str) -> (String, String, String) {
 /// Runs `carcli <cmd> fixtures/<car_file>` with `current_dir = resources/tests/` and
 /// returns stdout as a `String`.  Passing `fixtures/<file>` produces a stable relative
 /// path in the `info` "File:" line regardless of the machine's workspace location.
-fn run_cli(car_file: &str, cmd: &str) -> String {
+fn run_cli(car_file: &str, cmd: &str, extra_args: &[&str]) -> String {
 	let ws = test_fixtures_path();
 	// let car_path = ws.join(car_file).to_string_lossy().to_string();
 
 	let mut args: Vec<&str> = cmd.split_whitespace().collect();
 	args.push(car_file);
+	extra_args.iter().for_each(|extra_arg| args.push(extra_arg));
 
 	let out = Command::new(env!("CARGO_BIN_EXE_carcli"))
 		.args(&args)
@@ -105,7 +106,7 @@ fn output_test_file(car_file_name: &str, ext: &str) -> String {
 #[test_case("symlink.car", "info -B")]
 fn info_test(car_file: &str, cmd: &str) {
 	let expected_content = output_test_file(car_file, "info.output");
-	let output = run_cli(car_file, cmd);
+	let output = run_cli(car_file, cmd, &[]);
 	assert_eq!(output, expected_content);
 }
 
@@ -120,9 +121,27 @@ fn info_test(car_file: &str, cmd: &str) {
 #[test_case("symlink.car", "ls -B")]
 fn ls_test(car_file: &str, cmd: &str) {
 	let expected_content = output_test_file(car_file, "ls.output");
-	let output = run_cli(car_file, cmd);
+	let output = run_cli(car_file, cmd, &[]);
 	assert_eq!(output, expected_content);
 }
+
+// ── cat tests ──────────────────────────────────────────────────────────────────
+
+#[test_case("dir-with-files.car", "cat", "hello.txt", "hello world\n")]
+#[test_case("dir-with-files.car", "cat", "ascii.txt", "hello application/vnd.ipld.car\n")]
+#[test_case("dir-with-files.car", "cat", "multiblock.txt", MULTIBLOCK_CONTENT)]
+#[test_case("symlink.car", "cat", "foo", "content\n")]
+#[test_case("symlink.car", "cat", "bar", "content\n")]
+#[test_case("dag-pb.car", "cat", "foo/bar.txt", "Hello, world!\n")]
+#[test_case("fixtures.car", "cat", "ą/ę/file-źł.txt", "I am a txt file on path with utf8\n")]
+fn cat_test(car_file: &str, cmd: &str, file: &str, exp_file_content: &str) {
+	let output = run_cli(car_file, cmd, &[file]);
+	assert_eq!(output, exp_file_content);
+}
+
+const MULTIBLOCK_CONTENT :&str = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Nunc non imperdiet nunc. Proin ac quam ut nibh eleifend aliquet. Vestibulum ante ipsum primis in faucibus orci luctus et ultrices posuere cubilia curae; Sed ligula dolor, imperdiet sagittis arcu et, semper tincidunt urna. Donec et tempor augue, quis sollicitudin metus. Curabitur semper ullamcorper aliquet. Mauris hendrerit sodales lectus eget fermentum. Proin sollicitudin vestibulum commodo. Vivamus nec lectus eu augue aliquet dignissim nec condimentum justo. In hac habitasse platea dictumst. Mauris vel sem neque.
+
+Vivamus finibus, enim at lacinia semper, arcu erat gravida lacus, sit amet gravida magna orci sit amet est. Sed non leo lacus. Nullam viverra ipsum a tincidunt dapibus. Nulla pulvinar ligula sit amet ante ultrices tempus. Proin purus urna, semper sed lobortis quis, gravida vitae ipsum. Aliquam mi urna, pulvinar eu bibendum quis, convallis ac dolor. In gravida justo sed risus ullamcorper, vitae luctus massa hendrerit. Pellentesque habitant amet.";
 
 // ── create extract and re-pack  test ────────────────────────────────────────────────────
 

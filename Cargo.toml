@@ -4,9 +4,9 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-authors = [""]
-homepage = ""
-repository = ""
+authors = ["Miguel Garcia <miguel@dmious.com>"]
+homepage = "https://github.com/fmiguelgarcia/ipld-car"
+repository = "https://github.com/fmiguelgarcia/ipld-car"
 license = "MIT"
 
 [workspace.lints.rust]
@@ -40,7 +40,7 @@ default_constructed_unit_structs = { level = "allow", priority = 2 } # stylistic
 
 
 [workspace.dependencies]
-ipld-car = { path = "ipld-car" }
+ipld-car = { path = "ipld-car", version = "0.1.0" }
 petgraph = "0.8.3"
 
 # libipld: CID

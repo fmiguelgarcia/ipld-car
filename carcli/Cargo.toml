@@ -1,19 +1,24 @@
 [package]
 name = "carcli"
 version = "0.1.0"
-license.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-publish = false
+license = "MIT"
 description = "CLI tool for Content Addressable Archive (CAR) from IPLD"
+authors = ["Miguel Garcia <miguel@dmious.com>"]
+homepage = "https://github.com/fmiguelgarcia/ipld-car"
+repository = "https://github.com/fmiguelgarcia/ipld-car"
+readme = "../README.md"
+edition = "2021"
+publish = true
+
+keywords = ["car", "ipld", "vfs"]
+categories = ["command-line-utilities", "filesystem"]
 
 [[bin]]
 name = "carcli"
 path = "src/main.rs"
 
 [dependencies]
-ipld-car = { workspace = true, features = ["std", "vfs", "cli"] }
+ipld-car = { workspace = true, features = ["std", "cli"] }
 petgraph.workspace = true
 
 clap.workspace = true
