@@ -1,12 +1,17 @@
 [package]
 name = "ipld-car"
 version = "0.1.0"
-license.workspace = true
-authors.workspace = true
-edition.workspace = true
-homepage.workspace = true
-publish = false
+license = "MIT"
+description = "DAG-PB serialization/deserialization library for IPFS CAR v1 archives"
+authors = ["Miguel Garcia <miguel@dmious.com>"]
+homepage = "https://github.com/fmiguelgarcia/ipld-car"
+repository = "https://github.com/fmiguelgarcia/ipld-car"
+readme = "../README.md"
+edition = "2021"
+publish = true
 
+categories = ["filesystem"]
+keywords = ["car", "ipld", "vfs"]
 
 [dependencies]
 libipld = { workspace = true, features = ["dag-pb", "dag-json"] }
@@ -65,7 +70,7 @@ anyhow.workspace = true
 criterion.workspace = true
 
 [features]
-default = [ "std", "vfs" ]
+default = [ "std" ]
 jumbo-chunks = []
 test_helpers = []
 cli = [ "dep:clap" ]
