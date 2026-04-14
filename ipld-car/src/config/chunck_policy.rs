@@ -1,5 +1,4 @@
 use derive_more::From;
-use nbytes::bytes;
 use std::num::NonZeroUsize;
 use strum::{EnumIter, EnumString, IntoEnumIterator};
 
@@ -50,29 +49,29 @@ pub enum WellKnownChunkSize {
 	#[strum(serialize = "512B", ascii_case_insensitive)]
 	F512B = 512,
 	#[strum(serialize = "1KiB", ascii_case_insensitive)]
-	F1KiB = bytes!(1; KiB),
+	F1KiB = 1024,
 	#[strum(serialize = "16KiB", ascii_case_insensitive)]
-	F16KiB = bytes!(16; KiB),
+	F16KiB = 16 * 1024,
 	#[default]
 	#[strum(serialize = "256KiB", ascii_case_insensitive)]
-	F256KiB = bytes!(256; KiB),
+	F256KiB = 256 * 1024,
 	#[strum(serialize = "1MiB", ascii_case_insensitive)]
-	F1MiB = bytes!(1; MiB),
+	F1MiB = 1_024 * 1_024,
 	#[cfg(feature = "jumbo-chunks")]
 	#[strum(serialize = "8MiB", ascii_case_insensitive)]
-	F8MiB = bytes!(8; MiB),
+	F8MiB = 8 * 1_024 * 1_024,
 	#[cfg(feature = "jumbo-chunks")]
 	#[strum(serialize = "32MiB", ascii_case_insensitive)]
-	F32MiB = bytes!(32; MiB),
+	F32MiB = 32 * 1_024 * 1_024,
 	#[cfg(feature = "jumbo-chunks")]
 	#[strum(serialize = "128MiB", ascii_case_insensitive)]
-	F128MiB = bytes!(128; MiB),
+	F128MiB = 128 * 1_024 * 1_024,
 	#[cfg(feature = "jumbo-chunks")]
 	#[strum(serialize = "256MiB", ascii_case_insensitive)]
-	F256MiB = bytes!(256; MiB),
+	F256MiB = 256 * 1_024 * 1_024,
 	#[cfg(feature = "jumbo-chunks")]
 	#[strum(serialize = "512MiB", ascii_case_insensitive)]
-	F512MiB = bytes!(512; MiB),
+	F512MiB = 512 * 1_024 * 1_024,
 }
 
 fn valid_chunk_size_args() -> String {

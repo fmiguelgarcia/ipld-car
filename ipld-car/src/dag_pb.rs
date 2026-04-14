@@ -163,7 +163,7 @@ fn load_symlink<T>(
 	unixfs: proto::Data,
 ) -> DagPbResult<BlockId> {
 	let posix_path = unixfs.data.ok_or(UnixFsErr::MissingSymlinkInfo)?;
-	let posix_path_utf8 =  String::from_utf8(posix_path).map_err(|_| UnixFsErr::SymlinkPathUtf8)?;
+	let posix_path_utf8 = String::from_utf8(posix_path).map_err(|_| UnixFsErr::SymlinkPathUtf8)?;
 	let block = Block::new_dag_pb(cid, DagPb::symlink(posix_path_utf8), pb_data);
 	Ok(car.add_block(block))
 }
