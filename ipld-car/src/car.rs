@@ -37,7 +37,7 @@ use libipld::{
 };
 use petgraph::{
 	graph::{EdgeReference, Graph, NodeIndex},
-	visit::{Dfs, EdgeRef, Reversed, Walker},
+	visit::{Bfs, Dfs, EdgeRef, Reversed, Walker},
 	Direction,
 };
 use smallvec::{smallvec, SmallVec};
@@ -300,6 +300,12 @@ impl<T> ContentAddressableArchive<T> {
 	pub fn block_count(&self) -> usize {
 		self.dag.node_count()
 	}
+
+	pub fn into_inner_file(self) -> Option<T> {
+		let unique_content = self.content.clone_and_rewind();
+		drop(self);
+		unique_content.into_inner_file()
+	}
 }
 
 impl<T: Read + Seek> ContentAddressableArchive<T> {
@@ -381,6 +387,7 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 		// Update Block
 		self.index_by_cid.insert(cid, id);
 		let block = self.dag.node_weight_mut(id).ok_or(NotFoundErr::BlockId(id))?;
+		tracing::debug!(block_id = ?id, prev_cid = block.cid.to_string(), cid = cid.to_string(), "CID updated on block" );
 		block.cid = cid;
 		if let BlockType::DagPb(dag_pb) = &mut block.r#type {
 			dag_pb.data = BoundedReader::from(dag_pb_data);
@@ -573,6 +580,23 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 				Ok(block.cid)
 			})
 			.collect()
+	}
+
+	pub fn cids(&self) -> HashSet<Cid> {
+		self.root_ids
+			.iter()
+			.flat_map(|root_id| {
+				let bfs = Bfs::new(&self.dag, *root_id);
+				bfs.iter(&self.dag)
+					.filter_map(|node_id| self.dag.node_weight(node_id).map(|block| block.cid))
+					.collect::<HashSet<Cid>>()
+			})
+			.collect::<HashSet<Cid>>()
+	}
+
+	pub fn block_from_cid(&self, cid: &Cid) -> Option<&Block<T>> {
+		let block_id = self.index_by_cid.get(cid)?;
+		self.dag.node_weight(*block_id)
 	}
 }
 

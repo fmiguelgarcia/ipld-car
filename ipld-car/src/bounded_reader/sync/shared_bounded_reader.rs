@@ -49,6 +49,10 @@ impl<T> SharedBoundedReader<T> {
 		Self { reader, start: range.start, end: range.end, curr: 0 }
 	}
 
+	pub fn into_inner(self) -> Option<T> {
+		Arc::into_inner(self.reader)?.into_inner().ok()
+	}
+
 	/// Convert relative position to absolute position bounded by file range.
 	fn relative_to_abs(&self, relative: u64) -> u64 {
 		min(relative.saturating_add(self.start), self.end)

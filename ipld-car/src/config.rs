@@ -75,6 +75,18 @@ impl Config {
 	}
 }
 
+impl From<ChunkPolicy> for Config {
+	fn from(chunk_policy: ChunkPolicy) -> Self {
+		Self { chunk_policy, ..Default::default() }
+	}
+}
+
+impl From<WellKnownChunkSize> for Config {
+	fn from(wk: WellKnownChunkSize) -> Self {
+		Self { chunk_policy: wk.into(), ..Default::default() }
+	}
+}
+
 impl TryFrom<&Cid> for Config {
 	type Error = Error;
 
