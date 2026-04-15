@@ -24,7 +24,7 @@ pub struct SubCmdWrite {
 
 impl SubCmdWrite {
 	pub fn run(&self) -> Result<()> {
-		let mut car = ContentAddressableArchive::new(self.config)?;
+		let mut car = ContentAddressableArchive::directory(self.config)?;
 
 		for entry in &self.entries {
 			let (dest, src) =

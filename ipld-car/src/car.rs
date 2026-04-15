@@ -96,15 +96,14 @@ pub struct ContentAddressableArchive<T> {
 }
 
 impl ContentAddressableArchive<BufWriter<File>> {
-	pub fn new_temp(config: Config) -> Result<Self> {
+	pub fn tempfile(config: Config) -> Result<Self> {
 		let content = BoundedReader::from_reader(BufWriter::new(tempfile()?))?;
-
 		Ok(Self::base_new(content, config))
 	}
 }
 
 impl<T> ContentAddressableArchive<T> {
-	pub fn new_without_root(config: Config) -> Self {
+	pub fn new(config: Config) -> Self {
 		Self::base_new(BoundedReader::empty(), config)
 	}
 
@@ -203,8 +202,9 @@ impl<T> ContentAddressableArchive<T> {
 	/// Returns the `BlockId`s associated to `path`.
 	///
 	/// Please note that it can be more than one because a CAR can contains multiple roots.
-	fn path_to_block_ids(&self, path: &Path) -> Result<SmallBlockIds> {
-		let not_found_path = || NotFoundErr::Path(path.to_owned());
+	fn path_to_block_ids<P: AsRef<Path>>(&self, path: P) -> Result<SmallBlockIds> {
+		let path = path.as_ref();
+		let not_found_path = || NotFoundErr::path(path);
 		let mut levels = vec![self.root_ids.clone()];
 
 		for path_component in path.components() {
@@ -238,19 +238,20 @@ impl<T> ContentAddressableArchive<T> {
 	/// Returns the  **unique**`BlockId` associated to `path`.
 	///
 	/// If there is more that one `BlockId`, it will fail with an `Error::MoreThanOneMatchOnPath(..)`
-	fn path_to_block_id(&self, path: &Path) -> Result<BlockId> {
+	fn path_to_block_id<P: AsRef<Path>>(&self, path: P) -> Result<BlockId> {
+		let path = path.as_ref();
 		let ids = self.path_to_block_ids(path)?;
 		ensure!(ids.len() < 2, Error::more_than_one(ids.len(), path));
-		ids.first().copied().ok_or_else(|| Error::NotFound(NotFoundErr::Path(path.to_owned())))
+		ids.first().copied().ok_or_else(|| NotFoundErr::path(path).into())
 	}
 
 	/// Returns the **unique** `Block` associated to `path`
-	fn path_to_block(&self, path: &Path) -> Result<&'_ Block<T>> {
+	fn path_to_block<P: AsRef<Path>>(&self, path: P) -> Result<&'_ Block<T>> {
 		let id = self.path_to_block_id(path)?;
 		self.dag.node_weight(id).ok_or(NotFoundErr::BlockId(id).into())
 	}
 
-	pub fn path_to_cid(&self, path: &Path) -> Option<&Cid> {
+	pub fn path_to_cid<P: AsRef<Path>>(&self, path: P) -> Option<&Cid> {
 		self.path_to_block(path).map(|block| &block.cid).ok()
 	}
 
@@ -309,8 +310,8 @@ impl<T> ContentAddressableArchive<T> {
 }
 
 impl<T: Read + Seek> ContentAddressableArchive<T> {
-	pub fn new(config: Config) -> Result<Self> {
-		let mut this = Self::new_without_root(config);
+	pub fn directory(config: Config) -> Result<Self> {
+		let mut this = Self::new(config);
 
 		// Add a root folder
 		let root_folder = Block::new_dag_pb(Cid::default(), DagPb::directory(), ());
@@ -427,7 +428,7 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 // ===========================================================================
 
 impl<T> ContentAddressableArchive<T> {
-	pub fn read_dir(&self, path: &Path) -> Result<impl Iterator<Item = &str>> {
+	pub fn read_dir<P: AsRef<Path>>(&self, path: P) -> Result<impl Iterator<Item = &str>> {
 		let block_id = self.path_to_block_id(path)?;
 		let mut entries = self
 			.dag
@@ -439,16 +440,16 @@ impl<T> ContentAddressableArchive<T> {
 		Ok(entries.into_iter())
 	}
 
-	pub fn open_file(&self, path: &Path) -> Result<BoundedReader<T>> {
+	pub fn open_file<P: AsRef<Path>>(&self, path: P) -> Result<BoundedReader<T>> {
 		self.open_file_with_loop_detector(path, smallvec![])
 	}
 
-	fn open_file_with_loop_detector(
+	fn open_file_with_loop_detector<P: AsRef<Path>>(
 		&self,
-		path: &Path,
+		path: P,
 		mut open_block_ids: SmallVec<[BlockId; 1]>,
 	) -> Result<BoundedReader<T>> {
-		let id = self.path_to_block_id(path)?;
+		let id = self.path_to_block_id(path.as_ref())?;
 		let block = self.dag.node_weight(id).ok_or(NotFoundErr::BlockId(id))?;
 		match &block.r#type {
 			BlockType::Raw => Ok(block.data.clone_and_rewind()),
@@ -456,9 +457,9 @@ impl<T> ContentAddressableArchive<T> {
 				DagPbType::SingleBlockFile => Ok(dag_pb.data.clone_and_rewind()),
 				DagPbType::MultiBlockFile(_mbf) => Ok(self.open_multi_block_file(id)),
 				DagPbType::Symlink(symlink) => {
-					check_loop_and_update(&mut open_block_ids, path, id)?;
-					let target_abs_path = self.resolve_open_symlink(path, Path::new(&symlink.posix_path));
-					self.open_file_with_loop_detector(&target_abs_path, open_block_ids)
+					check_loop_and_update(&mut open_block_ids, path.as_ref(), id)?;
+					let target_abs_path = self.resolve_open_symlink(path, &symlink.posix_path);
+					self.open_file_with_loop_detector(target_abs_path, open_block_ids)
 				},
 				DagPbType::Dir => fail!(InvalidErr::is_a_dir(path)),
 				DagPbType::MissingBlock(pb_link) => fail!(InvalidErr::is_a_miss_block(path, &pb_link.cid)),
@@ -466,13 +467,14 @@ impl<T> ContentAddressableArchive<T> {
 		}
 	}
 
-	fn resolve_open_symlink(&self, link_path: &Path, target_path: &Path) -> PathBuf {
+	fn resolve_open_symlink<PL: AsRef<Path>, PT: AsRef<Path>>(&self, link_path: PL, target_path: PT) -> PathBuf {
+		let target_path = target_path.as_ref();
 		if target_path.is_absolute() {
 			return target_path.to_path_buf();
 		}
 
 		let root = Path::new("/");
-		let mut link_path_parent = link_path.parent().unwrap_or(root);
+		let mut link_path_parent = link_path.as_ref().parent().unwrap_or(root);
 		if link_path_parent.as_os_str().is_empty() {
 			link_path_parent = root;
 		}
@@ -493,12 +495,16 @@ impl<T> ContentAddressableArchive<T> {
 		ChainedBoundedReader::new(part_readers).into()
 	}
 
-	pub fn metadata(&self, path: &Path) -> Result<Metadata> {
+	pub fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<Metadata> {
 		self.metadata_with_loop_detector(path, smallvec![])
 	}
 
-	fn metadata_with_loop_detector(&self, path: &Path, mut open_block_ids: SmallVec<[BlockId; 1]>) -> Result<Metadata> {
-		let block_id = self.path_to_block_id(path)?;
+	fn metadata_with_loop_detector<P: AsRef<Path>>(
+		&self,
+		path: P,
+		mut open_block_ids: SmallVec<[BlockId; 1]>,
+	) -> Result<Metadata> {
+		let block_id = self.path_to_block_id(path.as_ref())?;
 		let block = self.dag.node_weight(block_id).ok_or(NotFoundErr::BlockId(block_id))?;
 
 		let meta = match &block.r#type {
@@ -511,10 +517,10 @@ impl<T> ContentAddressableArchive<T> {
 				},
 				DagPbType::Dir => Metadata::directory(),
 				DagPbType::Symlink(symlink) => {
-					check_loop_and_update(&mut open_block_ids, path, block_id)?;
-					let target_abs_path = self.resolve_open_symlink(path, Path::new(&symlink.posix_path));
-					let target_meta = self.metadata_with_loop_detector(&target_abs_path, open_block_ids)?;
-					Metadata::symlink(target_meta, Path::new(&symlink.posix_path))
+					check_loop_and_update(&mut open_block_ids, path.as_ref(), block_id)?;
+					let target_abs_path = self.resolve_open_symlink(path, &symlink.posix_path);
+					let target_meta = self.metadata_with_loop_detector(target_abs_path, open_block_ids)?;
+					Metadata::symlink(target_meta, &symlink.posix_path)
 				},
 				DagPbType::MissingBlock(link) => fail!(InvalidErr::is_a_miss_block(path, &link.cid)),
 			},
@@ -523,14 +529,20 @@ impl<T> ContentAddressableArchive<T> {
 		Ok(meta)
 	}
 
-	pub fn exists(&self, path: &Path) -> bool {
+	pub fn exists<P: AsRef<Path>>(&self, path: P) -> bool {
 		self.path_to_block_id(path).ok().is_some()
 	}
 }
 
 impl<T: Read + Seek> ContentAddressableArchive<T> {
+	pub fn with_dir<P: AsRef<Path>>(mut self, path: P) -> Result<Self> {
+		self.create_dir(path)?;
+		Ok(self)
+	}
+
 	/// Creates a new empty directory at `parent_path/dir_name`.
-	pub fn create_dir(&mut self, path: &Path) -> Result<()> {
+	pub fn create_dir<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+		let path = path.as_ref();
 		let dir_name = path
 			.file_name()
 			.ok_or_else(|| InvalidErr::file_name(path))?
@@ -552,7 +564,13 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 		self.rebuild_ancestors(new_dir_id)
 	}
 
-	pub fn add_file(&mut self, path: &Path, reader: T) -> Result<()> {
+	pub fn with_file<P: AsRef<Path>>(mut self, path: P, reader: T) -> Result<Self> {
+		self.add_file(path, reader)?;
+		Ok(self)
+	}
+
+	pub fn add_file<P: AsRef<Path>>(&mut self, path: P, reader: T) -> Result<()> {
+		let path = path.as_ref();
 		let os_name = path.file_name().ok_or_else(|| NotFoundErr::file_name(path))?;
 		let name = os_name.to_str().ok_or_else(|| InvalidErr::not_utf8_path(os_name))?;
 
@@ -759,12 +777,12 @@ impl<T> ContextLen for ContentAddressableArchive<T> {
 
 /// Uses `open_block_ids` to track visited block IDs, in order to detect loops during the
 /// resolution of symbolic links.
-fn check_loop_and_update(
+fn check_loop_and_update<P: Into<PathBuf>>(
 	open_block_ids: &mut SmallVec<[BlockId; 1]>,
-	target_path: &Path,
+	target_path: P,
 	target_id: BlockId,
 ) -> Result<()> {
-	ensure!(!open_block_ids.contains(&target_id), LoopDetectedErr::Symlink(target_path.to_owned()));
+	ensure!(!open_block_ids.contains(&target_id), LoopDetectedErr::Symlink(target_path.into()));
 
 	open_block_ids.push(target_id);
 	Ok(())

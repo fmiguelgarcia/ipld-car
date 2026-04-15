@@ -5,7 +5,7 @@ use clap::Args;
 use std::{
 	fs::File,
 	io::{copy, BufReader},
-	path::{Path, PathBuf},
+	path::PathBuf,
 };
 
 /// Arguments for the `cat` subcommand.
@@ -23,7 +23,7 @@ impl SubCmdCat {
 		let file = BufReader::new(File::open(&self.file)?);
 		let car = ContentAddressableArchive::load(file)?;
 
-		let mut reader = car.open_file(Path::new(&self.path))?;
+		let mut reader = car.open_file(&self.path)?;
 		let mut stdout = std::io::stdout().lock();
 		copy(&mut reader, &mut stdout)?;
 
