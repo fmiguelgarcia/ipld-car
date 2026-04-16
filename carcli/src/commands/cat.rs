@@ -1,4 +1,4 @@
-use ipld_car::ContentAddressableArchive;
+use ipld_car::{traits::AsFileSystem as _, ContentAddressableArchive};
 
 use anyhow::Result;
 use clap::Args;

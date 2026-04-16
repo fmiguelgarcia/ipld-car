@@ -21,10 +21,11 @@ use crate::{
 		sync::{BoundedReader, ChainedBoundedReader},
 		traits::{Bounded as _, CloneAndRewind as _},
 	},
+	car::tools::parent_or_root,
 	config::{CidCodec, Config},
 	dag_pb::{BlockLink, DagPb, DagPbType, Link, NamedLink},
 	ensure,
-	error::{Error, InvalidErr, LoopDetectedErr, NotFoundErr, NotSupportedErr, Result},
+	error::{Error, InvalidErr, NotFoundErr, NotSupportedErr, Result},
 	fail, proto,
 	traits::ContextLen,
 };
@@ -37,20 +38,24 @@ use libipld::{
 };
 use petgraph::{
 	graph::{EdgeReference, Graph, NodeIndex},
-	visit::{Bfs, Dfs, EdgeRef, Reversed, Walker},
+	visit::{Dfs, EdgeRef, Reversed, Walker},
 	Direction,
 };
-use smallvec::{smallvec, SmallVec};
+use smallvec::SmallVec;
 use std::{
-	collections::{HashMap, HashSet, VecDeque},
+	collections::HashMap,
 	fs::File,
-	io::{copy, BufWriter, Read, Seek, SeekFrom, Write},
+	io::{copy, BufWriter, Read, Seek},
 	path::{Component, Path, PathBuf},
 };
 use tempfile::tempfile;
-use tracing::{debug, trace};
+use tracing::debug;
 
+mod context_len;
+mod load;
 mod metadata;
+mod tools;
+mod write;
 pub use metadata::{FileType, Metadata};
 mod block;
 pub use block::{Block, BlockType};
@@ -63,6 +68,8 @@ mod cbor_cid;
 pub mod fs;
 mod header;
 pub(crate) use header::CarHeader;
+mod as_cid_graph;
+mod as_file_system;
 #[cfg(test)]
 mod tests;
 
@@ -80,9 +87,6 @@ pub struct ContentAddressableArchive<T> {
 
 	/// Blocks DAG
 	pub dag: Graph<Block<T>, Link>,
-
-	/// CAR root IDs.
-	root_ids: SmallBlockIds,
 
 	/// Index block ID by CID.
 	index_by_cid: HashMap<Cid, BlockId>,
@@ -108,12 +112,11 @@ impl<T> ContentAddressableArchive<T> {
 	}
 
 	fn base_new(content: BoundedReader<T>, config: Config) -> Self {
-		let root_ids = SmallBlockIds::new();
 		let index_by_cid = HashMap::new();
 		let mbf_pending_links = HashMap::new();
 		let dag = Graph::new();
 
-		Self { content, config, dag, index_by_cid, mbf_pending_links, root_ids, car_overhead_byte_counter: 0u64 }
+		Self { content, config, dag, index_by_cid, mbf_pending_links, car_overhead_byte_counter: 0u64 }
 	}
 
 	pub(crate) fn add_block_without_cid(&mut self, block: Block<T>) -> BlockId {
@@ -199,13 +202,20 @@ impl<T> ContentAddressableArchive<T> {
 		id
 	}
 
+	pub(crate) fn root_ids(&self) -> Vec<NodeIndex> {
+		self.dag
+			.node_indices()
+			.filter(|id| self.dag.edges_directed(*id, petgraph::Direction::Incoming).next().is_none())
+			.collect()
+	}
+
 	/// Returns the `BlockId`s associated to `path`.
 	///
 	/// Please note that it can be more than one because a CAR can contains multiple roots.
 	fn path_to_block_ids<P: AsRef<Path>>(&self, path: P) -> Result<SmallBlockIds> {
 		let path = path.as_ref();
 		let not_found_path = || NotFoundErr::path(path);
-		let mut levels = vec![self.root_ids.clone()];
+		let mut levels: Vec<SmallBlockIds> = vec![self.root_ids().into()];
 
 		for path_component in path.components() {
 			match path_component {
@@ -213,7 +223,7 @@ impl<T> ContentAddressableArchive<T> {
 					let name = os_name.to_str().ok_or_else(not_found_path)?;
 
 					let mut new_level = SmallBlockIds::new();
-					for block_id in levels.last().ok_or_else(not_found_path)? {
+					for block_id in levels.last().ok_or_else(not_found_path)?.iter() {
 						let mut targets = self
 							.dag
 							.edges_directed(*block_id, Direction::Outgoing)
@@ -253,10 +263,6 @@ impl<T> ContentAddressableArchive<T> {
 
 	pub fn path_to_cid<P: AsRef<Path>>(&self, path: P) -> Option<&Cid> {
 		self.path_to_block(path).map(|block| &block.cid).ok()
-	}
-
-	fn outgoing_links(&self, id: BlockId) -> Vec<BlockId> {
-		self.dag.edges_directed(id, Direction::Outgoing).map(|edge| edge.target()).collect()
 	}
 
 	fn outgoing_links_as_entries(&self, id: BlockId) -> Vec<PbLink> {
@@ -317,7 +323,6 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 		let root_folder = Block::new_dag_pb(Cid::default(), DagPb::directory(), ());
 		let root_folder_id = this.add_block_without_cid(root_folder);
 		this.rebuild(root_folder_id)?;
-		this.root_ids.push(root_folder_id);
 		Ok(this)
 	}
 
@@ -428,55 +433,15 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 // ===========================================================================
 
 impl<T> ContentAddressableArchive<T> {
-	pub fn read_dir<P: AsRef<Path>>(&self, path: P) -> Result<impl Iterator<Item = &str>> {
-		let block_id = self.path_to_block_id(path)?;
-		let mut entries = self
-			.dag
-			.edges_directed(block_id, Direction::Outgoing)
-			.filter_map(|edge| edge.weight().name())
-			.collect::<Vec<_>>();
-		entries.sort();
-
-		Ok(entries.into_iter())
-	}
-
-	pub fn open_file<P: AsRef<Path>>(&self, path: P) -> Result<BoundedReader<T>> {
-		self.open_file_with_loop_detector(path, smallvec![])
-	}
-
-	fn open_file_with_loop_detector<P: AsRef<Path>>(
-		&self,
-		path: P,
-		mut open_block_ids: SmallVec<[BlockId; 1]>,
-	) -> Result<BoundedReader<T>> {
-		let id = self.path_to_block_id(path.as_ref())?;
-		let block = self.dag.node_weight(id).ok_or(NotFoundErr::BlockId(id))?;
-		match &block.r#type {
-			BlockType::Raw => Ok(block.data.clone_and_rewind()),
-			BlockType::DagPb(dag_pb) => match &dag_pb.r#type {
-				DagPbType::SingleBlockFile => Ok(dag_pb.data.clone_and_rewind()),
-				DagPbType::MultiBlockFile(_mbf) => Ok(self.open_multi_block_file(id)),
-				DagPbType::Symlink(symlink) => {
-					check_loop_and_update(&mut open_block_ids, path.as_ref(), id)?;
-					let target_abs_path = self.resolve_open_symlink(path, &symlink.posix_path);
-					self.open_file_with_loop_detector(target_abs_path, open_block_ids)
-				},
-				DagPbType::Dir => fail!(InvalidErr::is_a_dir(path)),
-				DagPbType::MissingBlock(pb_link) => fail!(InvalidErr::is_a_miss_block(path, &pb_link.cid)),
-			},
-		}
-	}
-
 	fn resolve_open_symlink<PL: AsRef<Path>, PT: AsRef<Path>>(&self, link_path: PL, target_path: PT) -> PathBuf {
 		let target_path = target_path.as_ref();
 		if target_path.is_absolute() {
 			return target_path.to_path_buf();
 		}
 
-		let root = Path::new("/");
-		let mut link_path_parent = link_path.as_ref().parent().unwrap_or(root);
+		let mut link_path_parent = parent_or_root(link_path.as_ref());
 		if link_path_parent.as_os_str().is_empty() {
-			link_path_parent = root;
+			link_path_parent = Path::new("/");
 		}
 
 		link_path_parent.join(target_path)
@@ -494,296 +459,17 @@ impl<T> ContentAddressableArchive<T> {
 
 		ChainedBoundedReader::new(part_readers).into()
 	}
-
-	pub fn metadata<P: AsRef<Path>>(&self, path: P) -> Result<Metadata> {
-		self.metadata_with_loop_detector(path, smallvec![])
-	}
-
-	fn metadata_with_loop_detector<P: AsRef<Path>>(
-		&self,
-		path: P,
-		mut open_block_ids: SmallVec<[BlockId; 1]>,
-	) -> Result<Metadata> {
-		let block_id = self.path_to_block_id(path.as_ref())?;
-		let block = self.dag.node_weight(block_id).ok_or(NotFoundErr::BlockId(block_id))?;
-
-		let meta = match &block.r#type {
-			BlockType::Raw => Metadata::file(block.data.bound_len()),
-			BlockType::DagPb(dag_pb) => match &dag_pb.r#type {
-				DagPbType::SingleBlockFile => Metadata::file(block.data_len()),
-				DagPbType::MultiBlockFile(mbf) => {
-					let acc_len = mbf.block_sizes.iter().sum::<u64>();
-					Metadata::file(acc_len)
-				},
-				DagPbType::Dir => Metadata::directory(),
-				DagPbType::Symlink(symlink) => {
-					check_loop_and_update(&mut open_block_ids, path.as_ref(), block_id)?;
-					let target_abs_path = self.resolve_open_symlink(path, &symlink.posix_path);
-					let target_meta = self.metadata_with_loop_detector(target_abs_path, open_block_ids)?;
-					Metadata::symlink(target_meta, &symlink.posix_path)
-				},
-				DagPbType::MissingBlock(link) => fail!(InvalidErr::is_a_miss_block(path, &link.cid)),
-			},
-		};
-
-		Ok(meta)
-	}
-
-	pub fn exists<P: AsRef<Path>>(&self, path: P) -> bool {
-		self.path_to_block_id(path).ok().is_some()
-	}
 }
 
 impl<T: Read + Seek> ContentAddressableArchive<T> {
-	pub fn with_dir<P: AsRef<Path>>(mut self, path: P) -> Result<Self> {
-		self.create_dir(path)?;
-		Ok(self)
-	}
-
-	/// Creates a new empty directory at `parent_path/dir_name`.
-	pub fn create_dir<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
-		let path = path.as_ref();
-		let dir_name = path
-			.file_name()
-			.ok_or_else(|| InvalidErr::file_name(path))?
-			.to_str()
-			.ok_or_else(|| InvalidErr::not_utf8_path(path))?;
-		let parent_path = path.parent().unwrap_or_else(|| Path::new("."));
-		let parent_id = self.path_to_block_id(parent_path)?;
-
-		// `dir_name` is not already used.
-		let found_dir_name = self
-			.dag
-			.edges_directed(parent_id, Direction::Outgoing)
-			.find(|edge| edge.weight().name() == Some(dir_name));
-		ensure!(found_dir_name.is_none(), InvalidErr::exists(dir_name));
-
-		let new_dir = Block::new_dag_pb(Cid::default(), DagPb::directory(), ());
-		let new_dir_id = self.add_block(new_dir);
-		self.dag.add_edge(parent_id, new_dir_id, NamedLink::new(dir_name).into());
-		self.rebuild_ancestors(new_dir_id)
-	}
-
-	pub fn with_file<P: AsRef<Path>>(mut self, path: P, reader: T) -> Result<Self> {
-		self.add_file(path, reader)?;
-		Ok(self)
-	}
-
-	pub fn add_file<P: AsRef<Path>>(&mut self, path: P, reader: T) -> Result<()> {
-		let path = path.as_ref();
-		let os_name = path.file_name().ok_or_else(|| NotFoundErr::file_name(path))?;
-		let name = os_name.to_str().ok_or_else(|| InvalidErr::not_utf8_path(os_name))?;
-
-		// Create and add block.
-		let bounded = BoundedReader::from_reader(reader)?;
-		let block_id = BlockBuilder::new(self, bounded)?.build()?;
-
-		if !self.root_ids.is_empty() {
-			let parent_path = path.parent().unwrap_or(Path::new("."));
-			let parent_id = self.path_to_block_id(parent_path)?;
-			self.dag.add_edge(parent_id, block_id, NamedLink::new(name).into());
-			self.rebuild_ancestors(block_id)
-		} else {
-			self.root_ids.push(block_id);
-			self.dag.add_edge(block_id, block_id, NamedLink::new(name).into());
-			Ok(())
-		}
-	}
-
-	pub fn root_cids(&self) -> Result<Vec<Cid>> {
-		self.root_ids
-			.iter()
-			.map(|id| {
-				let block = self.dag.node_weight(*id).ok_or(NotFoundErr::BlockId(*id))?;
-				Ok(block.cid)
-			})
-			.collect()
-	}
-
-	pub fn cids(&self) -> HashSet<Cid> {
-		self.root_ids
-			.iter()
-			.flat_map(|root_id| {
-				let bfs = Bfs::new(&self.dag, *root_id);
-				bfs.iter(&self.dag)
-					.filter_map(|node_id| self.dag.node_weight(node_id).map(|block| block.cid))
-					.collect::<HashSet<Cid>>()
-			})
-			.collect::<HashSet<Cid>>()
-	}
-
 	pub fn block_from_cid(&self, cid: &Cid) -> Option<&Block<T>> {
 		let block_id = self.index_by_cid.get(cid)?;
 		self.dag.node_weight(*block_id)
 	}
 }
 
-// Load functions
-// ===========================================================================
-
-impl<F: Read + Seek> ContentAddressableArchive<F> {
-	pub fn load(reader: F) -> Result<Self> {
-		let mut reader = BoundedReader::from_reader(reader)?;
-		let mut this = Self::base_new(reader.clone(), Config::default());
-
-		// Load header
-		let header = CarHeader::load(&mut reader)?;
-		this.car_overhead_byte_counter += reader.stream_position()?;
-		trace!(?header, pos = this.car_overhead_byte_counter, "Header loaded");
-
-		// load each blocka
-		while let Some(block_def) = BlockDef::load(&mut reader)? {
-			// Block elements: content & consolidation info from `reader`
-			trace!(?block_def, "BlockDef loaded");
-			this.car_overhead_byte_counter += block_def.car_overhead_byte_counter;
-			let block_data = reader.sub(block_def.range.clone())?;
-
-			// Load block based on its CID.
-			let cid_codec = block_def.cid.codec();
-			let codec = CidCodec::from_repr(cid_codec).ok_or(Error::CodecNotSupported(cid_codec))?;
-			match codec {
-				CidCodec::Raw => this.add_block(Block::new_raw(block_def.cid, block_data)),
-				CidCodec::DagPb => DagPb::load(&mut this, block_def.cid, block_data)?,
-				_other => fail!(Error::CodecNotSupported(cid_codec)),
-			};
-			reader.seek(SeekFrom::Start(block_def.range.end))?;
-		}
-
-		// Update roots.
-		this.root_ids = header
-			.roots
-			.iter()
-			.filter_map(|cid| this.index_by_cid.get(&cid.0))
-			.cloned()
-			.collect::<SmallBlockIds>();
-
-		Ok(this)
+impl<T> Default for ContentAddressableArchive<T> {
+	fn default() -> Self {
+		Self::new(Config::default())
 	}
-}
-
-// Write functions
-// ===========================================================================
-
-impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
-	pub fn write<W: Write>(&mut self, writer: &mut W) -> Result<u64> {
-		// Write header
-		let header = CarHeader::new_v1(self.root_cids()?);
-		let header_written = header.write(writer)? as u64;
-		// debug!(?header, pos = header_written, "Header written");
-
-		// Write blocks in node insertion order, which preserves the original file block order
-		// on round-trips. BFS would visit children in reverse-insertion order due to petgraph's
-		// adjacency list being prepend-only.
-		let mut acc_written = 0u64;
-
-		for id in self.dag.node_indices() {
-			let block = self.dag.node_weight(id).ok_or(NotFoundErr::BlockId(id))?;
-			let cid = block.cid;
-			let written_bytes = match &block.r#type {
-				BlockType::Raw => {
-					let len = block.data.bound_len();
-					write_block(cid, len, &mut block.data.clone_and_rewind(), writer)?
-				},
-				BlockType::DagPb(dag_pb) => {
-					if block.data.bound_len() > 0 {
-						// Pass-through: write the original bytes from the loaded file.
-						let len = block.data.bound_len();
-						write_block(cid, len, &mut block.data.clone_and_rewind(), writer)?
-					} else {
-						// New block (no original bytes): encode from structure.
-						let pb_node = Bytes::from(self.as_pb_node(id, dag_pb)?.into_bytes());
-						let pb_node_len = pb_node.len() as u64;
-						write_block(cid, pb_node_len, &mut pb_node.reader(), writer)?
-					}
-				},
-			};
-			acc_written = acc_written.checked_add(written_bytes).ok_or(Error::FileTooLarge)?;
-		}
-
-		header_written.checked_add(acc_written).ok_or(Error::FileTooLarge)
-	}
-}
-
-fn write_block<R: Read, W: Write>(cid: Cid, reader_len: u64, reader: &mut R, w: &mut W) -> Result<u64> {
-	let cid = cid.to_bytes();
-	let section_len = reader_len.checked_add(cid.len() as u64).ok_or(Error::FileTooLarge)?;
-
-	let leb_written = leb128::write::unsigned(w, section_len)? as u64;
-	w.write_all(&cid)?;
-	let copied = copy(reader, w)?;
-
-	copied.checked_add(leb_written + cid.len() as u64).ok_or(Error::FileTooLarge)
-}
-
-impl<T> ContentAddressableArchive<T> {
-	fn traverse_blocks<F>(&self, mut len_fn: F) -> u64
-	where
-		F: FnMut(&Block<T>, BlockId, &mut VecDeque<BlockId>, &HashSet<BlockId>) -> u64,
-	{
-		let mut acc_len = 0u64;
-		let mut closed = HashSet::new();
-		let mut open = VecDeque::from_iter(self.root_ids.iter().copied());
-
-		while let Some(id) = open.pop_front() {
-			let Some(block) = self.dag.node_weight(id) else { continue };
-			let block_len = len_fn(block, id, &mut open, &closed);
-
-			closed.insert(id);
-			acc_len = acc_len.saturating_add(block_len);
-		}
-
-		acc_len
-	}
-}
-
-impl<T> ContextLen for ContentAddressableArchive<T> {
-	fn data_len(&self) -> u64 {
-		self.traverse_blocks(|block, id, open, closed| match &block.r#type {
-			BlockType::Raw => block.data.bound_len(),
-			BlockType::DagPb(dag_pb) => match &dag_pb.r#type {
-				DagPbType::Dir => {
-					for entry_id in self.outgoing_links(id) {
-						if entry_id != id && !open.contains(&entry_id) && !closed.contains(&entry_id) {
-							open.push_back(entry_id);
-						}
-					}
-					0u64
-				},
-				DagPbType::SingleBlockFile => dag_pb.data.bound_len(),
-				DagPbType::MultiBlockFile(mbf) => mbf.block_sizes.iter().sum(),
-				DagPbType::Symlink(..) | DagPbType::MissingBlock(..) => 0u64,
-			},
-		})
-	}
-
-	fn pb_data_len(&self) -> u64 {
-		self.traverse_blocks(|block, id, open, closed| {
-			if let BlockType::DagPb(dag_pb) = &block.r#type {
-				if let DagPbType::Dir = &dag_pb.r#type {
-					for entry_id in self.outgoing_links(id) {
-						if entry_id != id && !open.contains(&entry_id) && !closed.contains(&entry_id) {
-							open.push_back(entry_id);
-						}
-					}
-				}
-			}
-			block.data.bound_len()
-		})
-	}
-}
-
-// Tools
-// ===========================================================================
-
-/// Uses `open_block_ids` to track visited block IDs, in order to detect loops during the
-/// resolution of symbolic links.
-fn check_loop_and_update<P: Into<PathBuf>>(
-	open_block_ids: &mut SmallVec<[BlockId; 1]>,
-	target_path: P,
-	target_id: BlockId,
-) -> Result<()> {
-	ensure!(!open_block_ids.contains(&target_id), LoopDetectedErr::Symlink(target_path.into()));
-
-	open_block_ids.push(target_id);
-	Ok(())
 }

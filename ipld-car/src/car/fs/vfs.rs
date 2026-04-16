@@ -4,6 +4,7 @@ use crate::{
 		ContentAddressableArchive,
 	},
 	error::{Error, Result},
+	traits::AsFileSystem as _,
 };
 
 use std::{

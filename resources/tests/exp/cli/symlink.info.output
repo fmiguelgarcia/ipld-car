@@ -2,7 +2,10 @@ File:            symlink.car
 Blocks:          3
   Roots:         1
   Non-roots:     2
-Total CAR:       163B
-Total DAG-PB:    119B
-Total Data:      8B
+Storage space:
+  CAR:           163B
+  DAG-PB:        111B
+  Data:          8B
+  Total:         282B
+Root CIDs:
   [0] QmWvY6FaqFMS89YAQ9NAPjVP4WZKA1qbHbicc9HeSKQTgt

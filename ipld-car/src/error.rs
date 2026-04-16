@@ -108,3 +108,5 @@ where
 {
 	VfsError::from(kind).with_context(move || context.to_string())
 }
+
+pub(crate) const NODE_IDX_QED: &str = "NodeIndex exists .qed";

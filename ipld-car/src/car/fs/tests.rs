@@ -4,6 +4,7 @@ use crate::{
 	config::{Config, ConfigBuilder, LeafPolicy},
 	dag_pb::DagPb,
 	test_helpers::test_fixtures_file,
+	traits::{AsCIDGraph as _, AsFileSystem as _, AsFileSystemBuilder as _},
 };
 
 use anyhow::{anyhow, Result};
@@ -66,10 +67,9 @@ where
 #[test_case("bafybeigcsevw74ssldzfwhiijzmg7a35lssfmjkuoj2t5qs5u5aztj47tq", &["audio_only.m4a", "chat.txt", "playback.m3u", "zoom_0.mp4"]; "4.2.4 Directory with Missing blocks" )]
 fn vfs_dag_directory(name: &str, exp_dir_entries: &[&str]) -> Result<()> {
 	let content = BoundedReader::from_reader(test_fixtures_file(format!("{name}.dag-pb")))?;
-	let mut car = ContentAddressableArchive::new(Config::default());
+	let mut car = ContentAddressableArchive::default();
 	let cid = name.parse::<Cid>()?;
-	let id = DagPb::load(&mut car, cid, content)?;
-	car.root_ids.push(id);
+	let _id = DagPb::load(&mut car, cid, content)?;
 
 	let dir_entries = car.read_dir("/")?.collect::<Vec<_>>();
 	assert_eq!(dir_entries, exp_dir_entries);
@@ -122,7 +122,7 @@ where
 fn empty_dag_pb_directory(config: Config, exp_cid: &str) -> Result<()> {
 	let car = ContentAddressableArchive::<File>::directory(config)?;
 
-	let root_cid = car.root_cids()?.first().map(Cid::to_string).unwrap_or_default();
+	let root_cid = car.root_cids().next().map(Cid::to_string).unwrap_or_default();
 	assert_eq!(&root_cid, exp_cid);
 
 	Ok(())
