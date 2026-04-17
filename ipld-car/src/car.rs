@@ -202,10 +202,19 @@ impl<T> ContentAddressableArchive<T> {
 		id
 	}
 
+	/// Get the `BlockId` of root nodes.
+	///
+	/// **Root Node** is defined by a node with no **incoming** edges from **another** node.
+	/// It means that a root node can have a **incoming edge from itself**.
 	pub(crate) fn root_ids(&self) -> Vec<NodeIndex> {
 		self.dag
 			.node_indices()
-			.filter(|id| self.dag.edges_directed(*id, petgraph::Direction::Incoming).next().is_none())
+			.filter(|id| {
+				self.dag
+					.edges_directed(*id, petgraph::Direction::Incoming)
+					.find(|edge| edge.source() != edge.target())
+					.is_none()
+			})
 			.collect()
 	}
 
@@ -329,14 +338,14 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 	/// Recomputes consolidation info (like `CID`) for each block that was marked as dirty,
 	/// then propagates upward through all ancestors.
 	///
-	/// Uses pre-order DFS on the reversed graph so `id` is rebuilt first and ancestors follow
+	/// Uses DFS on the reversed graph so `id` is rebuilt first and ancestors follow
 	/// bottom-up. Cycle-safe: the DFS tracks visited nodes and never re-enters them.
 	fn rebuild_ancestors(&mut self, id: BlockId) -> Result<()> {
 		let rev_dag = Reversed(&self.dag);
 		let ancestors = Dfs::new(&rev_dag, id).iter(&rev_dag).collect::<Vec<_>>();
 
-		for block_id in ancestors {
-			self.rebuild(block_id)?;
+		for ancestor_id in ancestors {
+			self.rebuild(ancestor_id)?;
 		}
 
 		Ok(())
@@ -345,42 +354,41 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 	fn rebuild(&mut self, id: BlockId) -> Result<()> {
 		let mut hasher = self.config.hasher()?;
 
-		let (cid, dag_pb_data) = {
+		let cid = {
 			let block = self.dag.node_weight(id).ok_or(NotFoundErr::BlockId(id))?;
 
 			// Remove current CID from indexes
 			self.index_by_cid.remove(&block.cid);
 
 			// Rebuild CID
-			let (cid_codec, dag_pb_data) = match &block.r#type {
+			let cid_codec = match &block.r#type {
 				BlockType::Raw => {
 					let _len = copy(&mut block.data.clone_and_rewind(), &mut hasher)?;
-					(CidCodec::Raw, Bytes::new())
+					CidCodec::Raw
 				},
 				BlockType::DagPb(dag_pb) => {
 					let pb_node = self.as_pb_node(id, dag_pb)?;
 					let dag_pb_data = Bytes::from(pb_node.into_bytes());
-					let _len = copy(&mut dag_pb_data.clone().reader(), &mut hasher)?;
-					(CidCodec::DagPb, dag_pb_data)
+					let _len = copy(&mut dag_pb_data.reader(), &mut hasher)?;
+					CidCodec::DagPb
 				},
 			};
 
 			let digest = self.config.hash_code.wrap(hasher.finalize())?;
-			let cid = Cid::new_v1(cid_codec as u64, digest);
-			(cid, dag_pb_data)
+			Cid::new_v1(cid_codec as u64, digest)
 		};
 
 		// Calculate the cumulative_dag_size
 		let cumulative_dag_size = self
 			.dag
 			.edges_directed(id, Direction::Incoming)
-			.map(|edge| edge.weight().cumulative_dag_size())
+			.filter_map(|edge| (edge.target() != edge.source()).then_some(edge.weight().cumulative_dag_size()))
 			.sum();
 		let block_outgoing_edges = self
 			.dag
 			.edges_directed(id, Direction::Outgoing)
 			.filter_map(|edge| match edge.weight() {
-				Link::Block(..) => Some(edge.id()),
+				Link::Block(..) if edge.source() != edge.target() => Some(edge.id()),
 				_ => None,
 			})
 			.collect::<Vec<_>>();
@@ -395,9 +403,7 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 		let block = self.dag.node_weight_mut(id).ok_or(NotFoundErr::BlockId(id))?;
 		tracing::debug!(block_id = ?id, prev_cid = block.cid.to_string(), cid = cid.to_string(), "CID updated on block" );
 		block.cid = cid;
-		if let BlockType::DagPb(dag_pb) = &mut block.r#type {
-			dag_pb.data = BoundedReader::from(dag_pb_data);
-		}
+
 		Ok(())
 	}
 
@@ -414,7 +420,7 @@ impl<T: Read + Seek> ContentAddressableArchive<T> {
 			},
 			DagPbType::SingleBlockFile => {
 				let mut sbf_buf = Vec::with_capacity(dag_pb.data.bound_len() as usize);
-				let _ = dag_pb.data.clone_and_rewind().read_to_end(&mut sbf_buf)?;
+				let _read_bytes = dag_pb.data.clone_and_rewind().read_to_end(&mut sbf_buf)?;
 				let pb_data: Bytes = proto::Data::new_file_with_data(sbf_buf).into();
 				proto::new_pb_node(vec![], pb_data)
 			},
