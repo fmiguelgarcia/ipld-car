@@ -24,8 +24,7 @@ use crate::{
 	car::tools::parent_or_root,
 	config::{CidCodec, Config},
 	dag_pb::{BlockLink, DagPb, DagPbType, Link, NamedLink},
-	ensure,
-	error::{Error, InvalidErr, NotFoundErr, NotSupportedErr, Result},
+	error::{InvalidErr, NotFoundErr, Result},
 	fail, proto,
 	traits::ContextLen,
 };
@@ -46,7 +45,7 @@ use std::{
 	collections::HashMap,
 	fs::File,
 	io::{copy, BufWriter, Read, Seek},
-	path::{Component, Path, PathBuf},
+	path::{Path, PathBuf},
 };
 use tempfile::tempfile;
 use tracing::debug;
@@ -68,10 +67,12 @@ mod cbor_cid;
 pub mod fs;
 mod header;
 pub(crate) use header::CarHeader;
+mod as_block_finder;
 mod as_cid_graph;
 mod as_file_system;
 #[cfg(test)]
 mod tests;
+pub mod traits;
 
 pub type BlockId = NodeIndex<u32>;
 pub type SmallBlockIds = SmallVec<[BlockId; 1]>;
@@ -216,52 +217,6 @@ impl<T> ContentAddressableArchive<T> {
 					.is_none()
 			})
 			.collect()
-	}
-
-	/// Returns the `BlockId`s associated to `path`.
-	///
-	/// Please note that it can be more than one because a CAR can contains multiple roots.
-	fn path_to_block_ids<P: AsRef<Path>>(&self, path: P) -> Result<SmallBlockIds> {
-		let path = path.as_ref();
-		let not_found_path = || NotFoundErr::path(path);
-		let mut levels: Vec<SmallBlockIds> = vec![self.root_ids().into()];
-
-		for path_component in path.components() {
-			match path_component {
-				Component::Normal(os_name) => {
-					let name = os_name.to_str().ok_or_else(not_found_path)?;
-
-					let mut new_level = SmallBlockIds::new();
-					for block_id in levels.last().ok_or_else(not_found_path)?.iter() {
-						let mut targets = self
-							.dag
-							.edges_directed(*block_id, Direction::Outgoing)
-							.filter_map(|edge| (edge.weight().name() == Some(name)).then_some(edge.target()))
-							.collect::<SmallBlockIds>();
-						new_level.append(&mut targets);
-					}
-
-					levels.push(new_level)
-				},
-				Component::RootDir | Component::CurDir => {},
-				Component::ParentDir => {
-					levels.pop().ok_or_else(not_found_path)?;
-				},
-				Component::Prefix(..) => fail!(NotSupportedErr::Prefix),
-			}
-		}
-
-		levels.pop().ok_or_else(|| not_found_path().into())
-	}
-
-	/// Returns the  **unique**`BlockId` associated to `path`.
-	///
-	/// If there is more that one `BlockId`, it will fail with an `Error::MoreThanOneMatchOnPath(..)`
-	fn path_to_block_id<P: AsRef<Path>>(&self, path: P) -> Result<BlockId> {
-		let path = path.as_ref();
-		let ids = self.path_to_block_ids(path)?;
-		ensure!(ids.len() < 2, Error::more_than_one(ids.len(), path));
-		ids.first().copied().ok_or_else(|| NotFoundErr::path(path).into())
 	}
 
 	/// Returns the **unique** `Block` associated to `path`
@@ -464,13 +419,6 @@ impl<T> ContentAddressableArchive<T> {
 			.collect::<Vec<_>>();
 
 		ChainedBoundedReader::new(part_readers).into()
-	}
-}
-
-impl<T: Read + Seek> ContentAddressableArchive<T> {
-	pub fn block_from_cid(&self, cid: &Cid) -> Option<&Block<T>> {
-		let block_id = self.index_by_cid.get(cid)?;
-		self.dag.node_weight(*block_id)
 	}
 }
 

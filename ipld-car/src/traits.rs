@@ -1,5 +1,5 @@
 use libipld::Cid;
-use std::path::Path;
+use std::{ops::Range, path::Path};
 
 pub trait ContextLen {
 	fn data_len(&self) -> u64;
@@ -18,7 +18,22 @@ pub trait AsCIDGraph {
 	/// Returns all cids
 	fn cids(&self) -> impl Iterator<Item = &Cid>;
 
+	/// Returns all descendants (direct and transitive) of the given `cid`
 	fn descendants_of_cid(&self, cid: &Cid) -> Vec<&Cid>;
+
+	/// Returns the direct descendants of the given `cid`
+	fn direct_descendants_of_cid(&self, cid: &Cid) -> Vec<&Cid>;
+
+	/// Returns the direct ascendant/parents of the given `cid`
+	fn direct_parents_of_cid(&self, cid: &Cid) -> Vec<&Cid>;
+}
+
+pub trait AsBoundedContainer {
+	fn bounds_of(&self, cid: &Cid) -> Option<Range<u64>>;
+
+	fn bounds_len(&self, cid: &Cid) -> u64 {
+		self.bounds_of(cid).map(|bounds| bounds.end.saturating_sub(bounds.start)).unwrap_or(0u64)
+	}
 }
 
 pub trait AsFileSystem {
@@ -36,8 +51,6 @@ pub trait AsFileSystem {
 	/// Creates a new empty directory at `parent_path/dir_name`.
 	fn create_dir<P: AsRef<Path>>(&mut self, path: P) -> Result<(), Self::Error>;
 	fn read_dir<P: AsRef<Path>>(&self, path: P) -> Result<impl Iterator<Item = &str>, Self::Error>;
-
-	// pub fn path_to_cid<P: AsRef<Path>>(&self, path: P) -> Option<&Cid>;
 }
 
 pub trait AsFileSystemBuilder: AsFileSystem
