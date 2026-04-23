@@ -1,6 +1,7 @@
 use crate::{
 	car::fs::{CarFs, RWTransmuter},
 	error::{Error, Result},
+	traits::AsFileSystem as _,
 	ContentAddressableArchive,
 };
 

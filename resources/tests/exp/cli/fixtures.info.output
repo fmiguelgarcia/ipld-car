@@ -2,7 +2,10 @@ File:            fixtures.car
 Blocks:          10
   Roots:         1
   Non-roots:     9
-Total CAR:       430B
-Total DAG-PB:    623B
-Total Data:      150B
+Storage space:
+  CAR:           430B
+  DAG-PB:        473B
+  Data:          150B
+  Total:         1053B
+Root CIDs:
   [0] bafybeig6ka5mlwkl4subqhaiatalkcleo4jgnr3hqwvpmsqfca27cijp3i

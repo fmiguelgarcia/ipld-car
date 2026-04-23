@@ -4,11 +4,12 @@ use crate::{
 	config::{Config, ConfigBuilder, LeafPolicy},
 	dag_pb::DagPb,
 	test_helpers::test_fixtures_file,
+	traits::{AsCIDGraph as _, AsFileSystem as _, AsFileSystemBuilder as _},
 };
 
 use anyhow::{anyhow, Result};
 use libipld::{multihash::Code, Cid};
-use std::{fs::File, path::Path};
+use std::fs::File;
 use tempfile::tempfile;
 use test_case::test_case;
 use vfs::FileSystem;
@@ -66,12 +67,11 @@ where
 #[test_case("bafybeigcsevw74ssldzfwhiijzmg7a35lssfmjkuoj2t5qs5u5aztj47tq", &["audio_only.m4a", "chat.txt", "playback.m3u", "zoom_0.mp4"]; "4.2.4 Directory with Missing blocks" )]
 fn vfs_dag_directory(name: &str, exp_dir_entries: &[&str]) -> Result<()> {
 	let content = BoundedReader::from_reader(test_fixtures_file(format!("{name}.dag-pb")))?;
-	let mut car = ContentAddressableArchive::base_new(BoundedReader::empty(), Config::default());
+	let mut car = ContentAddressableArchive::default();
 	let cid = name.parse::<Cid>()?;
-	let id = DagPb::load(&mut car, cid, content)?;
-	car.root_ids.push(id);
+	let _id = DagPb::load(&mut car, cid, content)?;
 
-	let dir_entries = car.read_dir(Path::new("/"))?.collect::<Vec<_>>();
+	let dir_entries = car.read_dir("/")?.collect::<Vec<_>>();
 	assert_eq!(dir_entries, exp_dir_entries);
 
 	Ok(())
@@ -120,9 +120,9 @@ where
 #[test_case( ConfigBuilder::default().hash_code(Code::Blake2s256).build().unwrap(), "bafyobzacebxzx4f4amxpvjywriut5uzqpsbo4mkdfmpe7kgixhqqlhtmu5rhw"; "Blake2s256")]
 #[test_case( ConfigBuilder::default().hash_code(Code::Blake3_256).build().unwrap(), "bafyb4igcwu4aknzxeunla7d6swhtgjcpcdpi7hk5twl4ubnlczrqh3gmme"; "Blake3_256")]
 fn empty_dag_pb_directory(config: Config, exp_cid: &str) -> Result<()> {
-	let car = ContentAddressableArchive::<File>::new(config)?;
+	let car = ContentAddressableArchive::<File>::directory(config)?;
 
-	let root_cid = car.root_cids()?.first().map(Cid::to_string).unwrap_or_default();
+	let root_cid = car.root_cids().next().map(Cid::to_string).unwrap_or_default();
 	assert_eq!(&root_cid, exp_cid);
 
 	Ok(())
@@ -131,12 +131,11 @@ fn empty_dag_pb_directory(config: Config, exp_cid: &str) -> Result<()> {
 #[test_case( Config::default(), "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku" ; "4.3.1 Empty RAW block" )]
 #[test_case( ConfigBuilder::default().leaf_policy(LeafPolicy::UnixFs).build().unwrap(), "bafybeif7ztnhq65lumvvtr4ekcwd2ifwgm3awq4zfr3srh462rwyinlb4y"; "4.3.1 Empty dag-pb file" )]
 fn empty_file(config: Config, exp_cid: &str) -> Result<()> {
-	let file_path = Path::new("empty.txt");
+	const FILE_PATH: &str = "empty.txt";
 
-	let mut car = ContentAddressableArchive::<File>::new_without_root(config);
-	car.add_file(file_path, tempfile()?)?;
+	let car = ContentAddressableArchive::<File>::new(config).with_file(FILE_PATH, tempfile()?)?;
 
-	let file_cid = car.path_to_cid(file_path).copied().ok_or(anyhow!("Missing path"))?;
+	let file_cid = car.path_to_cid(FILE_PATH).copied().ok_or(anyhow!("Missing path"))?;
 	let file_cid = file_cid.to_string();
 	assert_eq!(file_cid, exp_cid);
 

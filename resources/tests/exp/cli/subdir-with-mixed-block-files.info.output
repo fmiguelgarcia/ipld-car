@@ -2,7 +2,10 @@ File:            subdir-with-mixed-block-files.car
 Blocks:          10
   Roots:         1
   Non-roots:     9
-Total CAR:       435B
-Total DAG-PB:    512B
-Total Data:      1069B
+Storage space:
+  CAR:           435B
+  DAG-PB:        469B
+  Data:          1069B
+  Total:         1973B
+Root CIDs:
   [0] bafybeidh6k2vzukelqtrjsmd4p52cpmltd2ufqrdtdg6yigi73in672fwu
