@@ -1,4 +1,4 @@
-use ipld_car::{Config, ContentAddressableArchive};
+use ipld_car::{traits::AsFileSystem as _, Config, ContentAddressableArchive};
 
 use anyhow::{anyhow, Result};
 use clap::Args;
@@ -24,7 +24,7 @@ pub struct SubCmdWrite {
 
 impl SubCmdWrite {
 	pub fn run(&self) -> Result<()> {
-		let mut car = ContentAddressableArchive::new(self.config)?;
+		let mut car = ContentAddressableArchive::directory(self.config)?;
 
 		for entry in &self.entries {
 			let (dest, src) =

@@ -1,11 +1,11 @@
 use crate::commands::common::{fmt_size, format_modified_time, pick_icon, SizeFormat};
-use ipld_car::{car::FileType, ContentAddressableArchive};
+use ipld_car::{car::FileType, traits::AsFileSystem as _, ContentAddressableArchive};
 
 use anyhow::Result;
 use clap::Args;
 use std::{
 	fs::File,
-	io::BufReader,
+	io::{BufReader, Read, Seek},
 	path::{Path, PathBuf},
 };
 use term_grid::{Direction, Filling, Grid, GridOptions};
@@ -45,7 +45,13 @@ impl SubCmdLs {
 	}
 
 	/// Recursively collects all entries with tree connectors and renders a columnar table.
-	fn print_tree<T>(&self, car: &ContentAddressableArchive<T>, user: &str, group: &str, modified: &str) -> Result<()> {
+	fn print_tree<T: Read + Seek>(
+		&self,
+		car: &ContentAddressableArchive<T>,
+		user: &str,
+		group: &str,
+		modified: &str,
+	) -> Result<()> {
 		let path = Path::new(&self.path);
 		let mut rows: Vec<(&'static str, String, String)> = Vec::new();
 		collect_tree(car, path, "", SizeFormat::from(self), &mut rows)?;
@@ -54,7 +60,13 @@ impl SubCmdLs {
 	}
 
 	/// Lists direct children of `self.path` as a flat columnar table.
-	fn print_list<T>(&self, car: &ContentAddressableArchive<T>, user: &str, group: &str, modified: &str) -> Result<()> {
+	fn print_list<T: Read + Seek>(
+		&self,
+		car: &ContentAddressableArchive<T>,
+		user: &str,
+		group: &str,
+		modified: &str,
+	) -> Result<()> {
 		let self_path = Path::new(&self.path);
 		let size_format = SizeFormat::from(self);
 		let entries = car.read_dir(self_path)?.collect::<Vec<_>>();
@@ -153,7 +165,7 @@ fn perms(file_type: FileType) -> &'static str {
 
 /// Resolves metadata for `name` under `parent`, returning file type, formatted size, icon, and suffix.
 /// Symlinks, which VFS reports as `NotSupported`, are returned with a `"@"` suffix.
-fn entry_info<T>(
+fn entry_info<T: Read + Seek>(
 	car: &ContentAddressableArchive<T>,
 	parent: &Path,
 	name: &Path,
@@ -175,7 +187,7 @@ fn entry_info<T>(
 
 /// Recursively appends rows to `rows` for all entries under `path`, decorating each
 /// name with tree connector art (`├──` / `└──`) and indentation carried in `prefix`.
-fn collect_tree<T>(
+fn collect_tree<T: Read + Seek>(
 	car: &ContentAddressableArchive<T>,
 	path: &Path,
 	prefix: &str,

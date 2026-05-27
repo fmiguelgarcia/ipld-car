@@ -4,6 +4,7 @@ use crate::{
 		ContentAddressableArchive,
 	},
 	error::{Error, Result},
+	traits::AsFileSystem as _,
 };
 
 use std::{
@@ -26,28 +27,24 @@ where
 	Error: From<<<T as RWTransmuter>::Writer as RWTransmuter>::IntoReaderErr>,
 {
 	fn read_dir(&self, path: &str) -> VfsResult<Box<dyn Iterator<Item = String> + Send>> {
-		let path = Path::new(path);
 		let entries = car_lock(&self.car)?.read_dir(path)?.map(|entry| entry.to_owned()).collect::<Vec<_>>();
 
 		Ok(Box::new(entries.into_iter()))
 	}
 
 	fn create_file(&self, path: &str) -> VfsResult<Box<dyn SeekAndWrite + Send>> {
-		let path = Path::new(path);
 		let writer = <T as RWTransmuter>::Writer::temporal()?;
 
-		let deferred_appender = DeferredAppendFile::<T, _>::new(self, path, writer);
+		let deferred_appender = DeferredAppendFile::<T, _>::new(self, Path::new(path), writer);
 		Ok(Box::new(deferred_appender))
 	}
 
 	fn create_dir(&self, path: &str) -> VfsResult<()> {
-		let path = Path::new(path);
 		let mut car = car_lock(&self.car)?;
 		car.create_dir(path).map_err(Into::into)
 	}
 
 	fn open_file(&self, path: &str) -> VfsResult<Box<dyn SeekAndRead + Send>> {
-		let path = Path::new(path);
 		let car = car_lock(&self.car)?;
 		let file = car.open_file(path)?;
 		Ok(Box::new(file))
@@ -60,7 +57,6 @@ where
 
 	/// Returns the file metadata for the file at this path
 	fn metadata(&self, path: &str) -> VfsResult<VfsMetadata> {
-		let path = Path::new(path);
 		let meta = car_lock(&self.car)?.metadata(path).map(Into::into)?;
 		Ok(meta)
 	}

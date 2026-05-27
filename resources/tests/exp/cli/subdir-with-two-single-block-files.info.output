@@ -2,7 +2,10 @@ File:            subdir-with-two-single-block-files.car
 Blocks:          4
   Roots:         1
   Non-roots:     3
-Total CAR:       208B
-Total DAG-PB:    208B
-Total Data:      43B
+Storage space:
+  CAR:           208B
+  DAG-PB:        165B
+  Data:          43B
+  Total:         416B
+Root CIDs:
   [0] bafybeietjm63oynimmv5yyqay33nui4y4wx6u3peezwetxgiwvfmelutzu

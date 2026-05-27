@@ -4,7 +4,7 @@ use ciborium::ser::Error as CborSerErr;
 use std::{
 	convert::Infallible,
 	io::{self, IntoInnerError, Read, Seek},
-	path::{Path, PathBuf},
+	path::PathBuf,
 	sync::{MutexGuard, PoisonError},
 };
 #[cfg(feature = "vfs")]
@@ -54,8 +54,8 @@ pub enum Error {
 }
 
 impl Error {
-	pub fn more_than_one(matches: usize, path: &Path) -> Self {
-		Self::MoreThanOneMatchOnPath(matches, path.to_owned())
+	pub fn more_than_one<P: Into<PathBuf>>(matches: usize, path: P) -> Self {
+		Self::MoreThanOneMatchOnPath(matches, path.into())
 	}
 }
 
@@ -108,3 +108,5 @@ where
 {
 	VfsError::from(kind).with_context(move || context.to_string())
 }
+
+pub(crate) const NODE_IDX_QED: &str = "NodeIndex exists .qed";

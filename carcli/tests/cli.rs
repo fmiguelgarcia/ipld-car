@@ -61,7 +61,6 @@ fn car_file_owner(_car_file: &str) -> (String, String, String) {
 /// path in the `info` "File:" line regardless of the machine's workspace location.
 fn run_cli(car_file: &str, cmd: &str, extra_args: &[&str]) -> String {
 	let ws = test_fixtures_path();
-	// let car_path = ws.join(car_file).to_string_lossy().to_string();
 
 	let mut args: Vec<&str> = cmd.split_whitespace().collect();
 	args.push(car_file);
@@ -86,7 +85,7 @@ fn output_test_file(car_file_name: &str, ext: &str) -> String {
 	// Path to output file
 	let mut output_file_name = Path::new(car_file_name).to_path_buf();
 	output_file_name.set_extension(ext);
-	let output_file_path = test_fixtures_path().join("..").join("exp").join("cli").join(&output_file_name);
+	let output_file_path = test_fixtures_path().join("../exp/cli").join(&output_file_name);
 
 	// Render it
 	let mut handlebars = Handlebars::new();

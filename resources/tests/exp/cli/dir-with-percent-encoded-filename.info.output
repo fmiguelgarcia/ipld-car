@@ -2,7 +2,10 @@ File:            dir-with-percent-encoded-filename.car
 Blocks:          2
   Roots:         1
   Non-roots:     1
-Total CAR:       133B
-Total DAG-PB:    128B
-Total Data:      38B
+Storage space:
+  CAR:           133B
+  DAG-PB:        90B
+  Data:          38B
+  Total:         261B
+Root CIDs:
   [0] bafybeig675grnxcmshiuzdaz2xalm6ef4thxxds6o6ypakpghm5kghpc34

@@ -43,7 +43,7 @@ impl Data {
 
 	pub fn new_file_with_data(data: Vec<u8>) -> Self {
 		let filesize = data.len() as u64;
-		let data = if data.is_empty() { None } else { Some(data) };
+		let data = if filesize != 0 { Some(data) } else { None };
 		Self::new(data::DataType::File, Some(filesize), vec![], data)
 	}
 

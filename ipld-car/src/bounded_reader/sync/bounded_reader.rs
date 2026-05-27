@@ -35,6 +35,13 @@ impl<T> BoundedReader<T> {
 	pub fn empty() -> Self {
 		Self::Mem(MemBoundedReader::new(Bytes::new()))
 	}
+
+	pub fn into_inner_file(self) -> Option<T> {
+		match self {
+			Self::Shared(shared) => shared.into_inner(),
+			_ => None,
+		}
+	}
 }
 
 impl<T: Seek> BoundedReader<T> {

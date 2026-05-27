@@ -2,7 +2,7 @@ use crate::car::BlockId;
 #[cfg(feature = "vfs")]
 use crate::error::vfs_err;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use thiserror::Error;
 #[cfg(feature = "vfs")]
 use vfs::error::{VfsError, VfsErrorKind};
@@ -23,12 +23,12 @@ pub enum NotFoundErr {
 }
 
 impl NotFoundErr {
-	pub fn path<P: AsRef<Path>>(p: P) -> Self {
-		Self::Path(p.as_ref().to_owned())
+	pub fn path<P: Into<PathBuf>>(p: P) -> Self {
+		Self::Path(p.into())
 	}
 
-	pub fn file_name<P: AsRef<Path>>(p: P) -> Self {
-		Self::FileName(p.as_ref().to_owned())
+	pub fn file_name<P: Into<PathBuf>>(p: P) -> Self {
+		Self::FileName(p.into())
 	}
 }
 

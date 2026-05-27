@@ -1,4 +1,4 @@
-use ipld_car::{Config, ContentAddressableArchive};
+use ipld_car::{traits::AsFileSystem as _, Config, ContentAddressableArchive};
 
 use anyhow::{anyhow, Result};
 use clap::Args;
@@ -22,7 +22,7 @@ pub struct SubCmdCreate {
 
 impl SubCmdCreate {
 	pub fn run(&self) -> Result<()> {
-		let mut car = ContentAddressableArchive::new(self.config)?;
+		let mut car = ContentAddressableArchive::directory(self.config)?;
 
 		let source =
 			self.source.canonicalize().map_err(|e| anyhow!("Cannot access `{}`: {e}", self.source.display()))?;
@@ -61,14 +61,14 @@ fn add_file(car: &mut ContentAddressableArchive<BufReader<File>>, src_path: &Pat
 	}
 
 	let file = BufReader::new(File::open(src_path).map_err(|e| anyhow!("Cannot open `{src_path:?}`: {e}"))?);
-	car.add_file(&car_path, file).map_err(Into::into)
+	car.add_file(car_path, file).map_err(Into::into)
 }
 
 fn add_directory(car: &mut ContentAddressableArchive<BufReader<File>>, src_path: &Path, root: &Path) -> Result<()> {
 	let car_path = dest_path(src_path, root)?;
 	// Create target path if needed.
 	if !car_path.as_path().as_os_str().is_empty() {
-		car.create_dir(&car_path).map_err(|e| anyhow!("Cannot create dir `{car_path:?}`: {e}"))?;
+		car.create_dir(car_path.as_path()).map_err(|e| anyhow!("Cannot create dir `{car_path:?}`: {e}"))?;
 	}
 
 	// Recursively add entries of that directory.
@@ -96,7 +96,7 @@ mod tests {
 	fn test_create() -> anyhow::Result<()> {
 		let car_path = Path::new("/tmp/carcli_test_create.car");
 		let cargo_manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("Env variable CARGO_MANIFEST_DIR is missing");
-		let source = Path::new(&cargo_manifest_dir).join("..").join("resources").join("tests");
+		let source = Path::new(&cargo_manifest_dir).join("../resources/tests");
 
 		let cmd_create = SubCmdCreate { output: car_path.into(), source, config: Config::default() };
 		cmd_create.run()?;
