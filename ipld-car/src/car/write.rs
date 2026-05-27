@@ -51,6 +51,9 @@ impl<T: Read + Seek + 'static> ContentAddressableArchive<T> {
 	pub fn write_to_tmp(&mut self) -> Result<NamedTempFile> {
 		let mut writer = BufWriter::new(NamedTempFile::new()?);
 		let _ = self.write(&mut writer)?;
-		Ok(writer.into_inner()?)
+		let mut writer = writer.into_inner()?;
+		writer.rewind()?;
+
+		Ok(writer)
 	}
 }

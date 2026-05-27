@@ -207,7 +207,7 @@ impl<T> ContentAddressableArchive<T> {
 	///
 	/// **Root Node** is defined by a node with no **incoming** edges from **another** node.
 	/// It means that a root node can have a **incoming edge from itself**.
-	pub(crate) fn root_ids(&self) -> Vec<NodeIndex> {
+	fn root_ids(&self) -> Vec<NodeIndex> {
 		self.dag
 			.node_indices()
 			.filter(|id| {
@@ -272,6 +272,8 @@ impl<T> ContentAddressableArchive<T> {
 		self.dag.node_count()
 	}
 
+	// NOTE: method `Shared::clone_and_rewind` does not apply the `rewind` if 
+	// there is no read on it. 
 	pub fn into_inner_file(self) -> Option<T> {
 		let unique_content = self.content.clone_and_rewind();
 		drop(self);
